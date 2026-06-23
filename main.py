@@ -387,24 +387,48 @@ class ToolsTab(QWidget):
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(
-            "Quick access. The cloud services manage their own syncing in their own "
-            "apps — these just open the right place.\n"))
+
+        def header(text):
+            lbl = QLabel(text)
+            lbl.setStyleSheet("font-weight: bold; margin-top: 8px;")
+            layout.addWidget(lbl)
 
         def open_btn(text, target):
             b = QPushButton(text)
             b.clicked.connect(lambda: run_cmd(["open", str(target)]))
             layout.addWidget(b)
 
-        open_btn("Open backup destination (Google Drive)", DEST_ROOT)
-        open_btn("Open backup logs folder", LOG_DIR)
-        open_btn("Open CloudStorage (Google / Dropbox / Proton)", CLOUD_DIR)
-        open_btn("Open iCloud Drive", ICLOUD_DIR)
-
-        tm = QPushButton("Open Time Machine settings")
+        header("Open locations")
+        open_btn("Backup destination (Google Drive)", DEST_ROOT)
+        open_btn("Backup logs folder", LOG_DIR)
+        open_btn("CloudStorage (Google / Dropbox / Proton)", CLOUD_DIR)
+        open_btn("iCloud Drive", ICLOUD_DIR)
+        tm = QPushButton("Time Machine settings")
         tm.clicked.connect(lambda: run_cmd(
             ["open", "x-apple.systempreferences:com.apple.Time-Machine-Settings.extension"]))
         layout.addWidget(tm)
+
+        header("Documentation")
+        app_dir = Path(__file__).resolve().parent
+        open_btn("App guide (this app's README)", app_dir / "README.md")
+        open_btn("Backup strategy (all devices)", BACKUP_DIR / "BACKUP_STRATEGY.md")
+        open_btn("Google Drive backup setup", BACKUP_DIR / "SETUP.md")
+        open_btn("Proton vault guide", BACKUP_DIR / "PROTON_VAULT.md")
+        open_btn("Lab overview", DOCS / "lab" / "README.md")
+
+        header("Cloud storage usage")
+        note = QLabel(
+            "Disk free/total is on the Dashboard. Per-cloud quotas live in each provider's\n"
+            "account page (there's no unified local API — iCloud/Proton can't be read in-app):")
+        note.setStyleSheet("color: gray;")
+        layout.addWidget(note)
+        open_btn("Google One storage", "https://one.google.com/storage")
+        open_btn("Dropbox plan & usage", "https://www.dropbox.com/account/plan")
+        open_btn("Proton storage dashboard", "https://account.proton.me/u/0/drive")
+        ic = QPushButton("iCloud storage (System Settings)")
+        ic.clicked.connect(lambda: run_cmd(
+            ["open", "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings"]))
+        layout.addWidget(ic)
 
         layout.addStretch()
 
