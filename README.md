@@ -4,14 +4,17 @@ A small PySide6 desktop app to monitor your cloud services and manage the custom
 Google Drive backup (the rsync job + launchd schedule in `_Admin/backup/`).
 
 ## What it does
-- **Dashboard:** free disk space, last backup status, and a list of your cloud
-  services (Google Drive, Dropbox, Proton Drive, iCloud) with mount status — plus the
-  total size of your local backup set.
-- **Google Drive Backup tab:** add/remove the folders that get backed up, edit the
-  exclude rules, run the backup now (with live log) or stop it, and enable/disable the
-  nightly 03:30 schedule.
-- **Tools tab:** one-click launchers into the backup destination, logs, CloudStorage,
-  iCloud Drive, and Time Machine settings.
+Single-screen, scrollable dashboard (no tabs) with four cards:
+- **Storage:** free space per mount — Local Disk, Google Drive, Dropbox, Proton Drive,
+  iCloud Drive — each with a progress bar that turns amber/red as it fills up. This is
+  filesystem-level free space (`shutil.disk_usage` on the mount point), not an OAuth
+  read of each provider's account quota.
+- **Google Drive Backup:** last run status, run/stop with live log, and the nightly
+  03:30 schedule toggle.
+- **Backed-up Folders:** add/remove folders, edit rsync excludes, see total local size.
+- **Tools & Links:** one-click launchers into the backup destination, logs,
+  CloudStorage, iCloud Drive, Time Machine settings, docs, and each provider's account
+  page (for actual cloud quota, which has no local API).
 
 ## What it deliberately does NOT do
 iCloud / Google Drive / Dropbox / Proton Drive each run their own proprietary sync
@@ -19,13 +22,23 @@ engines with no third-party API (iCloud especially). This app does not try to
 reconfigure those — it monitors them and links to their own settings. It has full
 control only over the backup layer we built (the rsync job).
 
-## Run
+## Run (from source)
 ```bash
 cd ~/Documents/lab/active/backup_manager
 uv venv .venv && uv pip install -r requirements.txt   # or python -m venv .venv && pip install -r requirements.txt
 source .venv/bin/activate
 python main.py
 ```
+
+## Build as a standalone app
+```bash
+cd ~/Documents/lab/active/backup_manager
+./build_app.sh
+```
+Builds `Backup Control Center.app` with PyInstaller and installs it into
+`/Applications`, so it launches from Spotlight/Finder/Dock like any other app — no
+terminal needed. Re-run `build_app.sh` after changing `main.py` to rebuild and
+reinstall. `build/` and `dist/` are gitignored (rebuild instead of committing).
 
 ## Config it reads/writes
 - `~/Documents/lab/_Admin/backup/backup_folders.txt` — the list of backed-up folders
