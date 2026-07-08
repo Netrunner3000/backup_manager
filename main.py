@@ -13,6 +13,7 @@ Run:  python main.py   (needs PySide6 — see requirements.txt)
 
 import sys
 import glob
+import re
 import shutil
 import subprocess
 from datetime import datetime
@@ -22,9 +23,9 @@ from PySide6.QtCore import Qt, QThread, Signal, QProcess
 from PySide6.QtGui import QTextCursor, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QListWidget, QTextEdit, QFileDialog, QMessageBox, QDialog,
+    QLabel, QPushButton, QListWidget, QTextEdit, QTextBrowser, QFileDialog, QMessageBox, QDialog,
     QPlainTextEdit, QListWidgetItem, QFrame, QScrollArea, QProgressBar,
-    QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QFormLayout,
+    QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QFormLayout, QComboBox,
 )
 
 import cloud_quota
@@ -86,6 +87,10 @@ QWidget {
 #TileName {
     font-weight: 600;
     font-size: 12px;
+}
+#TileAccount {
+    font-size: 10px;
+    color: #6b7280;
 }
 #TileStatus {
     font-size: 11px;
@@ -290,10 +295,30 @@ def cloud_services():
 
 
 def storage_targets():
-    """(name, path, exists) for every mount we can report free space for."""
+    """(name, path, exists) for Local Disk plus mounts that can show real account
+    quota (Google Drive, Dropbox). Proton Drive / iCloud Drive have no public quota
+    API, so showing them here would just repeat the Local Disk number — they're
+    left out rather than displayed as a misleading duplicate."""
     rows = [("Local Disk", HOME, True)]
-    rows.extend(cloud_services())
+    rows.extend(
+        (name, path, exists) for name, path, exists in cloud_services()
+        if cloud_quota.provider_for_name(name)
+    )
     return rows
+
+
+def split_tile_name(name):
+    """Split a CloudStorage folder name into (provider, account) for display."""
+    if name.startswith("GoogleDrive-"):
+        return "Google Drive", name[len("GoogleDrive-"):]
+    if name.startswith("ProtonDrive-"):
+        account = name[len("ProtonDrive-"):]
+        account = re.sub(r"-folder\b", "", account)
+        return "Proton Drive", account
+    if name.startswith("Dropbox"):
+        account = name[len("Dropbox"):].strip()
+        return "Dropbox", account
+    return name, ""
 
 
 def disk_usage_for(path):
@@ -317,8 +342,9 @@ def last_backup_info():
         status = "OK"
     elif "WITH ERRORS" in text:
         status = "ERRORS"
-    name = Path(latest).stem.replace("backup_", "")
-    return f"Last run: {name}  —  {status}", latest
+    match = re.search(r"\[([\d-]{10} [\d:]{8})\]\s+===== Backup run finished", text)
+    timestamp = match.group(1) if match else Path(latest).stem.replace("backup_", "")
+    return f"Last run: {timestamp}  —  {status}", latest
 
 
 # ----------------------------------------------------------------------------
@@ -353,23 +379,28 @@ TILE_WIDTH = 230
 
 
 class StorageTile(QFrame):
-    def __init__(self, name, path, exists, on_connect_request=None):
+    def __init__(self, name, path, exists, on_connect_request=None,
+                 provider_override=None, display_account=None, quota_only=False):
         super().__init__()
         self.account_key = name
-        self.provider = cloud_quota.provider_for_name(name) if exists else None
+        self.quota_only = quota_only
+        self.provider = provider_override or (cloud_quota.provider_for_name(name) if exists else None)
         self.setFixedWidth(TILE_WIDTH)
         self.setStyleSheet("background: #fafbfc; border-radius: 10px;")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
 
+        if provider_override:
+            provider = "Google Drive" if provider_override == "google" else "Dropbox"
+            account = display_account or ""
+        else:
+            provider, account = split_tile_name(name)
+
         top = QHBoxLayout()
-        name_lbl = QLabel(name)
+        name_lbl = QLabel(provider)
         name_lbl.setObjectName("TileName")
         name_lbl.setToolTip(name)
-        fm = name_lbl.fontMetrics()
-        avail = TILE_WIDTH - 24 - 16  # margins + status dot
-        name_lbl.setText(fm.elidedText(name, Qt.ElideRight, avail))
         top.addWidget(name_lbl)
         top.addStretch()
         dot = "●" if exists else "○"
@@ -377,6 +408,13 @@ class StorageTile(QFrame):
         status_lbl.setStyleSheet("color: #16a34a;" if exists else "color: #d1d5db;")
         top.addWidget(status_lbl)
         layout.addLayout(top)
+
+        if account:
+            account_lbl = QLabel(account)
+            account_lbl.setObjectName("TileAccount")
+            account_lbl.setWordWrap(True)
+            account_lbl.setToolTip(name)
+            layout.addWidget(account_lbl)
 
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -387,6 +425,12 @@ class StorageTile(QFrame):
         self.detail_lbl.setObjectName("TileFree")
         self.detail_lbl.setWordWrap(True)
         layout.addWidget(self.detail_lbl)
+
+        if path is not None and exists:
+            open_btn = link_button("Open in Finder →")
+            open_btn.setStyleSheet(open_btn.styleSheet() + "font-size: 10px; padding: 2px 0;")
+            open_btn.clicked.connect(lambda: run_cmd(["open", str(path)]))
+            layout.addWidget(open_btn)
 
         if self.provider and exists and not cloud_quota.is_connected(self.account_key):
             connect_btn = link_button("Connect for account quota →")
@@ -432,7 +476,18 @@ class StorageTile(QFrame):
                     self.bar.setValue(0)
                     self.detail_lbl.setText(f"{human_size(used)} used  (unlimited plan)")
                 return
-            self.detail_lbl.setText("Account quota unavailable — showing local disk:")
+            self.detail_lbl.setText(
+                "Account quota unavailable" if self.quota_only
+                else "Account quota unavailable — showing local disk:"
+            )
+            if self.quota_only:
+                self.bar.setValue(0)
+                return
+
+        if self.quota_only:
+            self.bar.setValue(0)
+            self.detail_lbl.setText("Not connected yet")
+            return
 
         usage = disk_usage_for(path)
         if usage is None:
@@ -456,6 +511,9 @@ class StorageCard(Card):
         title_lbl.setObjectName("CardTitle")
         header.addWidget(title_lbl)
         header.addStretch()
+        add_btn = secondary_button("+ Add account")
+        add_btn.clicked.connect(self.open_add_account_dialog)
+        header.addWidget(add_btn)
         accounts_btn = secondary_button("☁ Cloud accounts…")
         accounts_btn.clicked.connect(self.open_accounts_dialog)
         header.addWidget(accounts_btn)
@@ -475,15 +533,33 @@ class StorageCard(Card):
         for t in self.tiles:
             t.setParent(None)
         self.tiles = []
-        targets = storage_targets()
+        targets = [t for t in storage_targets() if t[2]]  # skip unmounted drives entirely
+        mounted_keys = {name for name, _path, _exists in targets}
         cols = 3
-        for i, (name, path, exists) in enumerate(targets):
+        i = 0
+        for name, path, exists in targets:
             tile = StorageTile(name, path, exists, on_connect_request=self.connect_account)
             self.grid.addWidget(tile, i // cols, i % cols)
             self.tiles.append(tile)
+            i += 1
+        for acc in cloud_quota.load_manual_accounts():
+            if acc["key"] in mounted_keys:
+                continue
+            tile = StorageTile(
+                acc["key"], None, True,
+                on_connect_request=self.connect_account,
+                provider_override=acc["provider"], display_account=acc["label"],
+                quota_only=True,
+            )
+            self.grid.addWidget(tile, i // cols, i % cols)
+            self.tiles.append(tile)
+            i += 1
 
     def open_accounts_dialog(self):
         CloudAccountsDialog(self, on_change=self.refresh).exec()
+
+    def open_add_account_dialog(self):
+        AddAccountDialog(self, on_change=self.refresh).exec()
 
     def connect_account(self, account_key, provider):
         dlg = CloudAccountsDialog(self, on_change=self.refresh)
@@ -572,39 +648,61 @@ class CloudAccountsDialog(QDialog):
         })
         self.status_lbl.setText("Saved.")
 
+    def _add_row(self, label_text, name, provider, removable=False):
+        row = QHBoxLayout()
+        lbl = QLabel(label_text)
+        connected = cloud_quota.is_connected(name)
+        status = QLabel("● connected" if connected else "○ not connected")
+        status.setStyleSheet("color: #16a34a;" if connected else "color: #9ca3af;")
+        btn = secondary_button("Disconnect" if connected else "Connect")
+        if connected:
+            btn.clicked.connect(lambda _, n=name: self.do_disconnect(n))
+        else:
+            btn.clicked.connect(lambda _, n=name, p=provider: self.do_connect(n, p))
+        row.addWidget(lbl)
+        row.addStretch()
+        row.addWidget(status)
+        row.addWidget(btn)
+        if removable:
+            rm_btn = secondary_button("Remove")
+            rm_btn.clicked.connect(lambda _, n=name: self.do_remove(n))
+            row.addWidget(rm_btn)
+        w = QWidget()
+        w.setLayout(row)
+        self.rows_box.addWidget(w)
+
     def populate_rows(self):
         while self.rows_box.count():
             item = self.rows_box.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
 
-        accounts = [
+        mounted = [
             (name, cloud_quota.provider_for_name(name))
             for name, _path, exists in cloud_services() if exists
         ]
-        accounts = [(n, p) for n, p in accounts if p]
-        if not accounts:
-            self.rows_box.addWidget(QLabel("No Google Drive / Dropbox mounts found."))
+        mounted = [(n, p) for n, p in mounted if p]
+        manual = cloud_quota.load_manual_accounts()
+
+        if not mounted and not manual:
+            self.rows_box.addWidget(QLabel("No Google Drive / Dropbox mounts or added accounts found."))
             return
 
-        for name, provider in accounts:
-            row = QHBoxLayout()
-            lbl = QLabel(name)
-            connected = cloud_quota.is_connected(name)
-            status = QLabel("● connected" if connected else "○ not connected")
-            status.setStyleSheet("color: #16a34a;" if connected else "color: #9ca3af;")
-            btn = secondary_button("Disconnect" if connected else "Connect")
-            if connected:
-                btn.clicked.connect(lambda _, n=name: self.do_disconnect(n))
-            else:
-                btn.clicked.connect(lambda _, n=name, p=provider: self.do_connect(n, p))
-            row.addWidget(lbl)
-            row.addStretch()
-            row.addWidget(status)
-            row.addWidget(btn)
-            w = QWidget()
-            w.setLayout(row)
-            self.rows_box.addWidget(w)
+        if mounted:
+            self.rows_box.addWidget(QLabel("Mounted folders:"))
+            for name, provider in mounted:
+                self._add_row(name, name, provider)
+
+        if manual:
+            self.rows_box.addWidget(QLabel("Added accounts:"))
+            for acc in manual:
+                self._add_row(acc["label"], acc["key"], acc["provider"], removable=True)
+
+    def do_remove(self, account_key):
+        cloud_quota.remove_manual_account(account_key)
+        self.populate_rows()
+        if self.on_change:
+            self.on_change()
 
     def do_connect(self, account_key, provider):
         self.status_lbl.setText(f"Opening browser to connect {account_key} — sign in and approve access…")
@@ -626,6 +724,75 @@ class CloudAccountsDialog(QDialog):
         self.populate_rows()
         if self.on_change:
             self.on_change()
+
+
+class AddAccountDialog(QDialog):
+    """Add a Google Drive / Dropbox account to monitor, with no local mount required."""
+
+    def __init__(self, parent=None, on_change=None):
+        super().__init__(parent)
+        self.on_change = on_change
+        self.worker = None
+        self.setWindowTitle("Add Account")
+        self.resize(420, 220)
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel(
+            "Monitor a Google Drive or Dropbox account's storage quota even if it\n"
+            "isn't mounted locally. Needs the OAuth app credentials from\n"
+            "Cloud Accounts… saved first."
+        ))
+
+        form = QFormLayout()
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItem("Google Drive", "google")
+        self.provider_combo.addItem("Dropbox", "dropbox")
+        self.label_edit = QLineEdit()
+        self.label_edit.setPlaceholderText("e.g. work.account@gmail.com")
+        form.addRow("Provider:", self.provider_combo)
+        form.addRow("Label:", self.label_edit)
+        layout.addLayout(form)
+
+        layout.addStretch()
+        self.status_lbl = QLabel("")
+        self.status_lbl.setObjectName("CardSubtitle")
+        layout.addWidget(self.status_lbl)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel_btn = secondary_button("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        connect_btn = QPushButton("Connect…")
+        connect_btn.clicked.connect(self.do_connect)
+        row.addWidget(cancel_btn)
+        row.addWidget(connect_btn)
+        layout.addLayout(row)
+
+    def do_connect(self):
+        label = self.label_edit.text().strip()
+        provider = self.provider_combo.currentData()
+        if not label:
+            self.status_lbl.setText("Enter a label for this account first.")
+            return
+        key = f"{provider}:{label}"
+        existing = [a["key"] for a in cloud_quota.load_manual_accounts()]
+        if key in existing or cloud_quota.is_connected(key):
+            self.status_lbl.setText("An account with that label already exists.")
+            return
+
+        self.status_lbl.setText("Opening browser — sign in and approve access…")
+        self.worker = ConnectWorker(provider, key)
+        self.worker.done.connect(lambda ok, err: self._finished(ok, err, key, provider, label))
+        self.worker.start()
+
+    def _finished(self, ok, error, key, provider, label):
+        if not ok:
+            self.status_lbl.setText(f"Failed: {error}")
+            return
+        cloud_quota.add_manual_account(key, provider, label)
+        if self.on_change:
+            self.on_change()
+        self.accept()
 
 
 # ----------------------------------------------------------------------------
@@ -819,6 +986,33 @@ class FoldersCard(Card):
 
 
 # ----------------------------------------------------------------------------
+# In-app documentation viewer
+# ----------------------------------------------------------------------------
+class DocViewerDialog(QDialog):
+    def __init__(self, parent, title, path):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(720, 720)
+        layout = QVBoxLayout(self)
+
+        viewer = QTextBrowser()
+        viewer.setOpenExternalLinks(True)
+        path = Path(path)
+        if path.exists():
+            viewer.setMarkdown(path.read_text(errors="replace"))
+        else:
+            viewer.setPlainText(f"File not found:\n{path}")
+        layout.addWidget(viewer)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+
+# ----------------------------------------------------------------------------
 # Tools / quick links card
 # ----------------------------------------------------------------------------
 class ToolsCard(Card):
@@ -854,11 +1048,11 @@ class ToolsCard(Card):
              lambda: run_cmd(["open", "x-apple.systempreferences:com.apple.Time-Machine-Settings.extension"])),
         ]
         docs = [
-            ("App guide (README)", app_dir / "README.md"),
-            ("Backup strategy", BACKUP_DIR / "BACKUP_STRATEGY.md"),
-            ("Google Drive setup", BACKUP_DIR / "SETUP.md"),
-            ("Proton vault guide", BACKUP_DIR / "PROTON_VAULT.md"),
-            ("Lab overview", DOCS / "lab" / "README.md"),
+            ("App guide (README)", lambda _=False, t="App Guide", p=app_dir / "README.md": self.open_doc(t, p)),
+            ("Backup strategy", lambda _=False, t="Backup Strategy", p=BACKUP_DIR / "BACKUP_STRATEGY.md": self.open_doc(t, p)),
+            ("Google Drive setup", lambda _=False, t="Google Drive Setup", p=BACKUP_DIR / "SETUP.md": self.open_doc(t, p)),
+            ("Proton vault guide", lambda _=False, t="Proton Vault Guide", p=BACKUP_DIR / "PROTON_VAULT.md": self.open_doc(t, p)),
+            ("Lab overview", lambda _=False, t="Lab Overview", p=DOCS / "lab" / "README.md": self.open_doc(t, p)),
         ]
         accounts = [
             ("Google One storage", "https://one.google.com/storage"),
@@ -872,6 +1066,9 @@ class ToolsCard(Card):
         grid.addLayout(col("Documentation", docs), 0, 1)
         grid.addLayout(col("Account pages", accounts), 0, 2)
         self.body(grid)
+
+    def open_doc(self, title, path):
+        DocViewerDialog(self, title, path).exec()
 
 
 # ----------------------------------------------------------------------------

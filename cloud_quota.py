@@ -36,9 +36,10 @@ from pathlib import Path
 
 import requests
 
-SECRETS_DIR = Path(__file__).resolve().parent / ".secrets"
+SECRETS_DIR = Path.home() / "Library" / "Application Support" / "Backup Control Center"
 CREDENTIALS_FILE = SECRETS_DIR / "app_credentials.json"
 TOKENS_FILE = SECRETS_DIR / "tokens.json"
+MANUAL_ACCOUNTS_FILE = SECRETS_DIR / "manual_accounts.json"
 
 REDIRECT_PORT = 53789
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}/"
@@ -91,6 +92,30 @@ def is_connected(account_key):
     return account_key in load_tokens()
 
 
+def load_manual_accounts():
+    """List of {"key", "provider", "label"} for accounts added via + Add account
+    that aren't backed by a local CloudStorage mount."""
+    data = _read_json(MANUAL_ACCOUNTS_FILE)
+    return data.get("accounts", [])
+
+
+def save_manual_accounts(accounts):
+    _write_json(MANUAL_ACCOUNTS_FILE, {"accounts": accounts})
+
+
+def add_manual_account(key, provider, label):
+    accounts = load_manual_accounts()
+    if not any(a["key"] == key for a in accounts):
+        accounts.append({"key": key, "provider": provider, "label": label})
+        save_manual_accounts(accounts)
+
+
+def remove_manual_account(key):
+    accounts = [a for a in load_manual_accounts() if a["key"] != key]
+    save_manual_accounts(accounts)
+    disconnect(key)
+
+
 def disconnect(account_key):
     tokens = load_tokens()
     tokens.pop(account_key, None)
@@ -99,8 +124,36 @@ def disconnect(account_key):
 
 # ----------------------------------------------------------------------------
 # One-shot local HTTP server to catch the OAuth redirect.
+#
+# Only one of these can be listening on REDIRECT_PORT at a time. If a previous
+# attempt was abandoned (browser closed, consent blocked, user clicked Connect
+# again before it timed out) its server is still bound to the port — so before
+# starting a new one we explicitly close out whatever's currently tracked here.
 # ----------------------------------------------------------------------------
+class _ReusableHTTPServer(http.server.HTTPServer):
+    allow_reuse_address = True
+
+
+_active_server_lock = threading.Lock()
+_active_server = None
+
+
+def _close_active_server():
+    global _active_server
+    with _active_server_lock:
+        if _active_server is not None:
+            try:
+                _active_server.shutdown()
+                _active_server.server_close()
+            except OSError:
+                pass
+            _active_server = None
+
+
 def _wait_for_redirect(port, timeout=180):
+    global _active_server
+    _close_active_server()
+
     result = {}
     done = threading.Event()
 
@@ -120,12 +173,13 @@ def _wait_for_redirect(port, timeout=180):
         def log_message(self, *args):
             pass
 
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+    server = _ReusableHTTPServer(("127.0.0.1", port), Handler)
+    with _active_server_lock:
+        _active_server = server
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     done.wait(timeout)
-    server.shutdown()
-    server.server_close()
+    _close_active_server()
     return result
 
 
