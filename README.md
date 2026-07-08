@@ -5,22 +5,29 @@ Google Drive backup (the rsync job + launchd schedule in `_Admin/backup/`).
 
 ## What it does
 Single-screen, scrollable dashboard (no tabs) with four cards:
-- **Storage:** free space per mount — Local Disk, Google Drive, Dropbox, Proton Drive,
-  iCloud Drive — each with a progress bar that turns amber/red as it fills up. This is
-  filesystem-level free space (`shutil.disk_usage` on the mount point), not an OAuth
-  read of each provider's account quota.
+- **Storage:** Local Disk free space, plus Google Drive / Dropbox mounts with a
+  progress bar that turns amber/red as it fills up. Local-disk-only providers
+  (Proton Drive, iCloud Drive) are intentionally left out — see below.
+  - **Cloud accounts…** — paste in a one-time OAuth app's Client ID/Secret (Google)
+    or App Key/Secret (Dropbox), then Connect a mounted account to show its real
+    storage quota (used/total) instead of local disk free space.
+  - **+ Add account** — monitor a Google Drive / Dropbox account's quota even if
+    it isn't mounted locally on this Mac.
 - **Google Drive Backup:** last run status, run/stop with live log, and the nightly
   03:30 schedule toggle.
 - **Backed-up Folders:** add/remove folders, edit rsync excludes, see total local size.
 - **Tools & Links:** one-click launchers into the backup destination, logs,
   CloudStorage, iCloud Drive, Time Machine settings, docs, and each provider's account
-  page (for actual cloud quota, which has no local API).
+  page.
 
 ## What it deliberately does NOT do
-iCloud / Google Drive / Dropbox / Proton Drive each run their own proprietary sync
-engines with no third-party API (iCloud especially). This app does not try to
-reconfigure those — it monitors them and links to their own settings. It has full
-control only over the backup layer we built (the rsync job).
+- It does not reconfigure the proprietary sync engines of iCloud / Google Drive /
+  Dropbox / Proton Drive — those stay in their own apps. It has full control only
+  over the backup layer we built (the rsync job).
+- It does not show account storage quota for Proton Drive or iCloud Drive — neither
+  provider publishes a public API for that, for any third-party app. This is a
+  permanent limitation, not a missing setup step. (Google Drive and Dropbox do
+  publish one, which is what **Cloud accounts…** uses.)
 
 ## Run (from source)
 ```bash
@@ -46,9 +53,16 @@ reinstall. `build/` and `dist/` are gitignored (rebuild instead of committing).
 - `~/Documents/lab/_Admin/backup/backup_to_gdrive.sh` — the backup script it runs
 - `~/Documents/lab/_Admin/backup/com.andreas.gdrive-backup.plist` — the schedule
 
-## Roadmap (v2 ideas)
-- Google account quota monitor
+## Backlog (not yet started)
+- Native macOS notification (success/failure) when a backup finishes, not just the
+  in-app log
+- Backup history table (last ~10 runs: date, status, duration), not just the latest
+- Dry-run preview (`rsync --dry-run`) button before committing to a real run
+- Auto-refresh storage tiles on a timer (e.g. every 5 min), not just on manual refresh
+- Confirmation dialog before "Remove selected" on a backed-up folder
+- Menu-bar companion showing last-backup status without opening the full window
+- Consistent light/dark mode — currently force-light everywhere; decide one way and
+  apply it fully (this is what caused the QLineEdit dark-mode contrast bug once already)
+- Single-instance guard so two copies can't run (and rsync) at once
 - Google Photos Takeout → Mac helper + Time Machine trigger
 - Proton vault "available offline" check
-- Menu-bar companion + native notifications
-- PyInstaller packaging into a standalone .app
