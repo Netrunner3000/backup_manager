@@ -463,8 +463,10 @@ class StorageTile(QFrame):
         if self.provider and cloud_quota.is_connected(self.account_key):
             try:
                 result = cloud_quota.quota(self.account_key)
-            except Exception:
+                quota_error = None
+            except Exception as e:
                 result = None
+                quota_error = str(e)
             if result is not None:
                 used, total = result
                 if total:
@@ -475,6 +477,12 @@ class StorageTile(QFrame):
                 else:
                     self.bar.setValue(0)
                     self.detail_lbl.setText(f"{human_size(used)} used  (unlimited plan)")
+                return
+            # Token likely expired or revoked
+            expired = quota_error and ("400" in quota_error or "401" in quota_error)
+            if expired:
+                self.bar.setValue(0)
+                self.detail_lbl.setText("Token expired — reconnect in Cloud accounts…")
                 return
             self.detail_lbl.setText(
                 "Account quota unavailable" if self.quota_only
