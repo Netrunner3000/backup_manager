@@ -19,6 +19,12 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+# Headless mode: launchd calls the .app with --run-backup instead of /bin/bash directly.
+# This lets the app's FDA grant cover the subprocess, bypassing the /bin/bash TCC block.
+if "--run-backup" in sys.argv:
+    _script = Path.home() / "Documents" / "lab" / "_Admin" / "backup" / "backup_to_gdrive.sh"
+    sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
+
 from PySide6.QtCore import Qt, QThread, Signal, QProcess
 from PySide6.QtGui import QTextCursor, QColor
 from PySide6.QtWidgets import (
@@ -283,6 +289,23 @@ def launchd_loaded():
     return LAUNCHD_LABEL in out
 
 
+def wake_schedule_active():
+    _, out, _ = run_cmd(["pmset", "-g", "sched"], timeout=10)
+    return "03:25" in out
+
+
+def set_wake_schedule(enable):
+    if enable:
+        cmd = "pmset repeat wakeorpoweron MTWRFSU 03:25:00"
+    else:
+        cmd = "pmset repeat cancel"
+    rc, _, err = run_cmd([
+        "osascript", "-e",
+        f'do shell script "{cmd}" with administrator privileges',
+    ], timeout=60)
+    return rc == 0, err
+
+
 def cloud_services():
     rows = []
     if CLOUD_DIR.exists():
@@ -298,12 +321,20 @@ def storage_targets():
     """(name, path, exists) for Local Disk plus mounts that can show real account
     quota (Google Drive, Dropbox). Proton Drive / iCloud Drive have no public quota
     API, so showing them here would just repeat the Local Disk number — they're
-    left out rather than displayed as a misleading duplicate."""
+    left out rather than displayed as a misleading duplicate.
+    Deduplicates by base account email — keeps the shortest (cleanest) folder name
+    when Google Drive creates multiple mounts for the same account."""
     rows = [("Local Disk", HOME, True)]
-    rows.extend(
-        (name, path, exists) for name, path, exists in cloud_services()
-        if cloud_quota.provider_for_name(name)
-    )
+    seen = {}  # base_email -> (name, path, exists)
+    for name, path, exists in cloud_services():
+        if not cloud_quota.provider_for_name(name):
+            continue
+        _, account = split_tile_name(name)
+        base = re.sub(r'\s+\(\d{2}-\d{2}-\d{4}.*\)$', '', account).strip()
+        key = (cloud_quota.provider_for_name(name), base)
+        if key not in seen or len(name) < len(seen[key][0]):
+            seen[key] = (name, path, exists)
+    rows.extend(seen.values())
     return rows
 
 
@@ -385,6 +416,9 @@ class StorageTile(QFrame):
         self.account_key = name
         self.quota_only = quota_only
         self.provider = provider_override or (cloud_quota.provider_for_name(name) if exists else None)
+        self._path = path
+        self._exists = exists
+        self._worker = None
         self.setFixedWidth(TILE_WIDTH)
         self.setStyleSheet("background: #fafbfc; border-radius: 10px;")
         layout = QVBoxLayout(self)
@@ -409,12 +443,12 @@ class StorageTile(QFrame):
         top.addWidget(status_lbl)
         layout.addLayout(top)
 
-        if account:
-            account_lbl = QLabel(account)
-            account_lbl.setObjectName("TileAccount")
-            account_lbl.setWordWrap(True)
-            account_lbl.setToolTip(name)
-            layout.addWidget(account_lbl)
+        self.account_lbl = QLabel(account)
+        self.account_lbl.setObjectName("TileAccount")
+        self.account_lbl.setWordWrap(True)
+        self.account_lbl.setToolTip(name)
+        self.account_lbl.setVisible(bool(account))
+        layout.addWidget(self.account_lbl)
 
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -439,7 +473,30 @@ class StorageTile(QFrame):
                 connect_btn.clicked.connect(lambda: on_connect_request(self.account_key, self.provider))
             layout.addWidget(connect_btn)
 
+        self.reconnect_btn = link_button("Token expired — reconnect →")
+        self.reconnect_btn.setStyleSheet(self.reconnect_btn.styleSheet() + "font-size: 10px; padding: 2px 0; color: #dc2626;")
+        if on_connect_request:
+            self.reconnect_btn.clicked.connect(lambda: self._do_reconnect(on_connect_request))
+        self.reconnect_btn.setVisible(False)
+        layout.addWidget(self.reconnect_btn)
+
         self.set_usage(path, exists)
+
+    def _do_reconnect(self, on_connect_request):
+        cloud_quota.disconnect(self.account_key)
+        self.reconnect_btn.setVisible(False)
+        self.detail_lbl.setText("Opening browser — sign in and approve access…")
+        self._worker = ConnectWorker(self.provider, self.account_key)
+        self._worker.done.connect(self._reconnect_done)
+        self._worker.start()
+
+    def _reconnect_done(self, ok, err):
+        if ok:
+            self.detail_lbl.setText("Reconnected!")
+            self.set_usage(self._path, self._exists)
+        else:
+            self.detail_lbl.setText(f"Failed: {err}")
+            self.reconnect_btn.setVisible(True)
 
     def _set_bar(self, pct_used):
         self.bar.setValue(pct_used)
@@ -461,6 +518,12 @@ class StorageTile(QFrame):
             return
 
         if self.provider and cloud_quota.is_connected(self.account_key):
+            # Fetch Dropbox email dynamically (mount name doesn't include it)
+            if self.provider == "dropbox":
+                email = cloud_quota.dropbox_account_email(self.account_key)
+                if email:
+                    self.account_lbl.setText(email)
+                    self.account_lbl.setVisible(True)
             try:
                 result = cloud_quota.quota(self.account_key)
                 quota_error = None
@@ -482,7 +545,8 @@ class StorageTile(QFrame):
             expired = quota_error and ("400" in quota_error or "401" in quota_error)
             if expired:
                 self.bar.setValue(0)
-                self.detail_lbl.setText("Token expired — reconnect in Cloud accounts…")
+                self.detail_lbl.setText("")
+                self.reconnect_btn.setVisible(True)
                 return
             self.detail_lbl.setText(
                 "Account quota unavailable" if self.quota_only
@@ -685,11 +749,20 @@ class CloudAccountsDialog(QDialog):
             if item.widget():
                 item.widget().setParent(None)
 
-        mounted = [
-            (name, cloud_quota.provider_for_name(name))
-            for name, _path, exists in cloud_services() if exists
-        ]
-        mounted = [(n, p) for n, p in mounted if p]
+        # Deduplicate by base email (same logic as storage_targets)
+        seen = {}
+        for name, _path, exists in cloud_services():
+            if not exists:
+                continue
+            p = cloud_quota.provider_for_name(name)
+            if not p:
+                continue
+            _, account = split_tile_name(name)
+            base = re.sub(r'\s+\(\d{2}-\d{2}-\d{4}.*\)$', '', account).strip()
+            key = (p, base)
+            if key not in seen or len(name) < len(seen[key][0]):
+                seen[key] = (name, p)
+        mounted = list(seen.values())
         manual = cloud_quota.load_manual_accounts()
 
         if not mounted and not manual:
@@ -853,6 +926,15 @@ class BackupStatusCard(Card):
         sched.addWidget(self.sched_btn)
         self.body(sched)
 
+        wake = QHBoxLayout()
+        self.wake_lbl = QLabel()
+        self.wake_btn = secondary_button("")
+        self.wake_btn.clicked.connect(self.toggle_wake)
+        wake.addWidget(self.wake_lbl)
+        wake.addStretch()
+        wake.addWidget(self.wake_btn)
+        self.body(wake)
+
         runrow = QHBoxLayout()
         self.run_btn = QPushButton("▶  Run backup now")
         self.run_btn.clicked.connect(self.run_backup)
@@ -871,6 +953,7 @@ class BackupStatusCard(Card):
         self.body(self.log)
 
         self.refresh_schedule()
+        self.refresh_wake()
 
     def refresh_status(self):
         info, _ = last_backup_info()
@@ -881,6 +964,22 @@ class BackupStatusCard(Card):
         self.sched_lbl.setText(
             "🕒 Nightly schedule (03:30): " + ("ENABLED" if loaded else "disabled"))
         self.sched_btn.setText("Disable" if loaded else "Enable")
+
+    def refresh_wake(self):
+        active = wake_schedule_active()
+        self.wake_lbl.setText(
+            "⏰ Wake Mac at 03:25 for backup: " + ("ENABLED" if active else "disabled"))
+        self.wake_btn.setText("Disable" if active else "Enable")
+
+    def toggle_wake(self):
+        if wake_schedule_active():
+            ok, err = set_wake_schedule(False)
+        else:
+            ok, err = set_wake_schedule(True)
+        if not ok:
+            if err and "User cancelled" not in err:
+                QMessageBox.warning(self, "Wake schedule", f"Could not update wake schedule:\n{err}")
+        self.refresh_wake()
 
     def toggle_schedule(self):
         if launchd_loaded():

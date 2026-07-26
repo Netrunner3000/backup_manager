@@ -321,6 +321,24 @@ def _dropbox_access_token(refresh_token):
     return resp.json()["access_token"]
 
 
+def dropbox_account_email(account_key):
+    """Returns the email address for a connected Dropbox account, or None."""
+    entry = load_tokens().get(account_key)
+    if not entry or entry["provider"] != "dropbox":
+        return None
+    try:
+        access_token = _dropbox_access_token(entry["refresh_token"])
+        resp = requests.post(
+            "https://api.dropboxapi.com/2/users/get_current_account",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.json().get("email")
+    except Exception:
+        return None
+
+
 def dropbox_quota(account_key):
     """Returns (used_bytes, total_bytes_or_None) or raises on error."""
     entry = load_tokens().get(account_key)
