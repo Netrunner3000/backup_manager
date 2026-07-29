@@ -35,22 +35,30 @@ Single-screen, scrollable dashboard with four cards:
 - It does not reconfigure the proprietary sync engines of iCloud / Google Drive /
   Dropbox / Proton Drive — those stay in their own apps. It has full control only
   over the backup layer we built (the rsync job).
-- It does not show account quota for Proton Drive or iCloud Drive — neither provider
-  publishes a public API for that. This is a permanent limitation, not a missing setup
-  step. (Google Drive and Dropbox do publish one, which is what **Cloud accounts…** uses.)
+- **iCloud Drive and Proton Drive cannot be added and will never show real cloud quota.**
+  Apple publishes no public API for iCloud storage, and Proton publishes none for Proton
+  Drive. This is a permanent limitation imposed by both providers, not a missing setup
+  step. Their tiles fall back to local disk free space. (Google Drive and Dropbox both
+  publish official REST APIs for quota, which is what **Cloud accounts…** uses.)
 
 ## Nightly backup — how it works
 The launchd job (`com.andreas.gdrive-backup`) calls:
 ```
-/usr/bin/open -a "Backup Control Center" --args --run-backup
+/usr/bin/open -n -a "Backup Control Center" --args --run-backup
 ```
-This launches the app in the user's GUI session (with full TCC/disk access), which
-detects `--run-backup`, runs `backup_to_gdrive.sh`, and exits. `/bin/bash` cannot be
-granted Full Disk Access directly on macOS 14+ (SIP-protected), which is why the .app
-is used as the runner.
+This forces a new instance of the app in the user's GUI session (with full TCC/disk
+access), which detects `--run-backup`, runs `backup_to_gdrive.sh`, and exits.
+`/bin/bash` cannot be granted Full Disk Access directly on macOS 14+ (SIP-protected),
+which is why the .app is used as the runner. The `-n` flag ensures the backup always
+runs even if the GUI is already open.
 
 If the Mac is sleeping at 03:30 launchd defers the job until the next wake. Enable
 **Wake Mac at 03:25** in the app to also cover full-shutdown nights.
+
+## Single-instance guard
+Opening a second GUI instance shows a native "Backup Control Center is already open"
+alert and brings the existing window to front. The `--run-backup` headless mode is
+exempt and always runs regardless.
 
 ## Credentials
 OAuth tokens and app credentials are stored in:
@@ -72,7 +80,8 @@ python main.py
 cd ~/Documents/lab/active/backup_manager
 ./build_app.sh
 ```
-Builds `Backup Control Center.app` with PyInstaller and installs it into `/Applications`.
+Builds `Backup Control Center.app` with PyInstaller, installs it into `/Applications`,
+and cleans up `build/` and `dist/` so Spotlight never indexes a stale second copy.
 Re-run after any change to `main.py` or `cloud_quota.py`. After rebuilding, re-grant
 Full Disk Access to the new build in System Settings → Privacy & Security → Full Disk
 Access (the code signature changes on each build).
@@ -92,6 +101,5 @@ Access (the code signature changes on each build).
 - Confirmation dialog before removing a backed-up folder
 - Menu-bar companion showing last-backup status without opening the full window
 - Consistent light/dark mode (currently force-light throughout)
-- Single-instance guard so two copies can't run rsync simultaneously
 - Google Photos Takeout → Mac helper + Time Machine trigger
 - Proton vault "available offline" check

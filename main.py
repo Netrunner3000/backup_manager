@@ -12,7 +12,9 @@ Run:  python main.py   (needs PySide6 — see requirements.txt)
 """
 
 import sys
+import fcntl
 import glob
+import os
 import re
 import shutil
 import subprocess
@@ -1236,7 +1238,39 @@ class MainWindow(QMainWindow):
         self.folders_card.reload_folders()
 
 
+_INSTANCE_LOCK_FILE = cloud_quota.SECRETS_DIR / "gui.lock"
+_instance_lock_fd = None  # kept open so the OS holds the lock for our lifetime
+
+
+def _acquire_instance_lock():
+    """Grab an exclusive flock on a lock file. Returns True for the first instance."""
+    global _instance_lock_fd
+    cloud_quota.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = open(_INSTANCE_LOCK_FILE, "w")
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fd.write(str(os.getpid()))
+        fd.flush()
+        _instance_lock_fd = fd  # keep fd alive so the lock holds
+        return True
+    except BlockingIOError:
+        return False
+
+
 def main():
+    if not _acquire_instance_lock():
+        # Show a native alert, then bring the existing window to front.
+        subprocess.run(
+            ["osascript", "-e",
+             'display alert "Backup Control Center is already open." '
+             'message "Only one instance can run at a time." '
+             'buttons {"OK"} default button "OK" '
+             'giving up after 8\n'
+             'tell application "Backup Control Center" to activate'],
+            check=False,
+        )
+        sys.exit(0)
+
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLE)
     win = MainWindow()
