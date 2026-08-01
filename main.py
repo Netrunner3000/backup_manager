@@ -27,7 +27,7 @@ if "--run-backup" in sys.argv:
     _script = Path.home() / "Documents" / "lab" / "_Admin" / "backup" / "backup_to_gdrive.sh"
     sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
 
-from PySide6.QtCore import Qt, QThread, Signal, QProcess
+from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer
 from PySide6.QtGui import QTextCursor, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -956,6 +956,37 @@ class BackupStatusCard(Card):
 
         self.refresh_schedule()
         self.refresh_wake()
+
+        # Poll every 5 min so auto-backup fires shortly after 03:30 on wake.
+        self._auto_timer = QTimer(self)
+        self._auto_timer.setInterval(5 * 60 * 1000)
+        self._auto_timer.timeout.connect(self._maybe_auto_backup)
+        self._auto_timer.start()
+        # Also check immediately in case the app was just opened after a missed night.
+        QTimer.singleShot(10_000, self._maybe_auto_backup)
+
+    def _maybe_auto_backup(self):
+        """Run the backup automatically if the schedule is on, it's past 03:30,
+        and no backup has run since 03:30 today."""
+        if self.proc is not None:
+            return  # already running
+        if not launchd_loaded():
+            return  # user disabled the schedule
+
+        now = datetime.now()
+        if now.hour < 3 or (now.hour == 3 and now.minute < 30):
+            return  # too early — wait until after 03:30
+
+        # Check if a backup log exists for today with a timestamp >= 03:30.
+        today_log = LOG_DIR / f"backup_{now.date()}.log"
+        if today_log.exists():
+            text = today_log.read_text(errors="replace")
+            # Look for a run that started at or after 03:30
+            for m in re.finditer(r"\[(\d{4}-\d{2}-\d{2} (\d{2}):(\d{2}):\d{2})\] ===== Backup run started", text):
+                h, mi = int(m.group(2)), int(m.group(3))
+                if h > 3 or (h == 3 and mi >= 30):
+                    return  # already ran today after 03:30
+        self.run_backup()
 
     def refresh_status(self):
         info, _ = last_backup_info()
