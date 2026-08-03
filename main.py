@@ -125,21 +125,33 @@ def build_app_style(dark: bool) -> str:
         menu_bdr = "#C6C6C8"
 
     return f"""
+/* ── Base: colour + font only — NO background.
+   Setting background here would paint every child widget with the page
+   colour, creating visible dark boxes inside lighter cards. Instead each
+   container sets its own background explicitly. ── */
 QWidget {{
-    background: {page};
     color: {text};
     font-size: 13px;
 }}
-#ScrollArea, #ScrollContent {{
+
+/* ── Page background — only on outer containers ── */
+QMainWindow, QScrollArea, QAbstractScrollArea,
+#ScrollArea, #ScrollContent, QDialog {{
     background: {page};
     border: none;
+}}
+
+/* ── Labels and other passive widgets: transparent
+   so the parent container's background shows through ── */
+QLabel {{
+    background: transparent;
+    color: {text};
 }}
 
 /* ── App header ─────────────────────────────────── */
 #AppTitle {{
     font-size: 20px;
     font-weight: 700;
-    color: {text};
     letter-spacing: -0.3px;
 }}
 #AppSubtitle {{
@@ -156,7 +168,6 @@ QWidget {{
 #CardTitle {{
     font-size: 13px;
     font-weight: 600;
-    color: {text};
     letter-spacing: -0.1px;
 }}
 #CardSubtitle {{
@@ -173,7 +184,6 @@ QWidget {{
 #TileName {{
     font-weight: 600;
     font-size: 12px;
-    color: {text};
 }}
 #TileAccount {{
     font-size: 10px;
