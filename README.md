@@ -1,107 +1,137 @@
 # Backup Control Center
 
 A PySide6 desktop app to monitor cloud storage and manage the custom Google Drive
-backup (the rsync job + launchd schedule in `_Admin/backup/`).
+backup (the rsync job in `_Admin/backup/`).
 
 ## What it does
-Single-screen, scrollable dashboard with four cards:
 
-- **Storage:** Local Disk, Google Drive, and Dropbox tiles — each with a progress bar
-  (turns amber/red as it fills) and real account quota via OAuth. Unmounted drives are
-  hidden automatically. Duplicate CloudStorage folders for the same account are
-  deduplicated. Proton Drive and iCloud Drive are intentionally excluded (see below).
-  - **Cloud accounts…** — paste a one-time OAuth Client ID/Secret (Google) or App
-    Key/Secret (Dropbox), then Connect each mount to show its real used/total quota.
-    Expired tokens show a red "Token expired — reconnect →" link that clears the stale
-    token and opens a fresh OAuth flow immediately.
-  - **+ Add account** — monitor a Google Drive / Dropbox account's quota even without
-    a local mount.
+Single-screen, scrollable dashboard with four cards plus a menu-bar icon.
 
-- **Google Drive Backup:** last run timestamp and status (OK / WITH ERRORS), live log,
-  and four controls:
-  - **▶ Run backup now** — starts the rsync backup immediately.
-  - **⚟ Dry run** — previews what rsync would copy without changing any files. Output
-    goes to a separate `dryrun_*.log` so it never interferes with backup-detection.
-  - **📋 History** — table of the last 15 backup runs (date, start time, duration, status).
-  - **■ Stop** — kills the running backup or dry run.
-  - Plus three toggles:
-    - **Nightly schedule (03:30)** — in-app auto-backup timer. When enabled, checks every
-      5 minutes: if past 03:30 and no backup ran since 03:30 today, triggers one.
-      Also checks 10 s after launch. **Requires app to be running.**
-    - **Wake Mac at 03:25** — `pmset` schedule that wakes the Mac so the timer can fire.
-    - **Open at login** — adds/removes the app as a macOS Login Item via System Events
-      AppleScript. Keeps the app running in the background so the auto-backup fires.
-  - **Notifications** — shows a macOS notification when a real backup finishes (OK or
-    errors). Also notifies at each 5-minute poll if the last successful backup is >25 h ago.
+### Storage
+Local Disk, Google Drive, and Dropbox tiles — each with a fill progress bar (turns
+amber at 70 %, red at 90 %) and real account quota once connected via OAuth. Unmounted
+drives are hidden automatically. Duplicate CloudStorage folders for the same account are
+deduplicated. Storage tiles auto-refresh every 5 minutes.
 
-- **Backed-up Folders:** add/remove folders from the rsync job (with confirmation before
-  removal), edit exclude patterns, see total local size.
+- **☁ Cloud accounts…** — paste a one-time OAuth Client ID/Secret (Google) or App
+  Key/Secret (Dropbox), then Connect each mount to show its real used/total quota.
+  Expired tokens show a red "Token expired — reconnect →" link.
+- **+ Add account** — monitor a Google Drive / Dropbox account's quota even without a
+  local mount.
+- Proton Drive and iCloud Drive are intentionally excluded — neither provider publishes
+  a public quota API (see "What it deliberately does NOT do").
 
-- **Tools & Links:** launchers into the backup destination, logs, CloudStorage, iCloud
-  Drive, Time Machine settings, in-app docs viewer, each provider's account page, plus:
-  - **Google Photos Takeout…** — step-by-step guide for downloading your Google Photos
-    library and importing it into the Mac Photos app.
-  - **Proton vault status** — checks whether the Proton Drive folder in CloudStorage is
-    mounted and accessible.
-  - **Time Machine: back up now** — triggers an immediate Time Machine backup.
+### Google Drive Backup
+Last run timestamp and status (OK / WITH ERRORS), live log output, and:
 
-- **Menu-bar icon** — shows the last backup status in a tooltip; right-click for
-  Show, Run Backup Now, and Quit without opening the full window.
+| Control | Effect |
+|---|---|
+| **▶ Run backup now** | Starts the rsync backup immediately |
+| **⚟ Dry run** | Previews what rsync would copy — no files changed. Writes to `dryrun_*.log` so it never confuses the auto-backup detector |
+| **📋 History** | Table of the last 15 backup runs: date, start time, duration, colour-coded status |
+| **■ Stop** | Kills the running backup or dry run |
 
-- **Dark mode** — automatically matches the system light/dark appearance at launch.
+Three toggles below the buttons:
+
+| Toggle | Effect |
+|---|---|
+| **🕒 Nightly schedule (03:30)** | Enables the in-app auto-backup timer (see "How the nightly backup works") |
+| **⏰ Wake Mac at 03:25** | Sets a `pmset` wake schedule so the Mac powers on before 03:30 |
+| **🚀 Open at login** | Adds or removes the app as a macOS Login Item — the recommended way to keep it running overnight |
+
+**Notifications:** a macOS notification fires when a real backup finishes (success or
+errors). If the last successful backup is more than 25 hours ago, a warning notification
+fires at each 5-minute poll tick.
+
+### Backed-up Folders
+Add or remove folders from the rsync job (confirmation required before removal), edit
+rsync exclude patterns, and see the total local size of the backup set.
+
+### Tools & Links
+Quick launchers and helpers in a grid:
+
+- **Open locations** — backup destination, logs directory, CloudStorage, iCloud Drive,
+  Time Machine settings.
+- **Documentation** — in-app viewer for README, Backup Strategy, Google Drive Setup,
+  Proton Vault Guide, and Lab Overview.
+- **Account pages** — Google One, Dropbox, Proton, iCloud storage pages.
+- **Tools** — Google Photos Takeout guide (step-by-step download + Photos import),
+  Proton vault mount check, and Time Machine: back up now.
+
+### Menu-bar icon
+A status item in the macOS menu bar shows the last backup timestamp in its tooltip.
+Right-click for **Show**, **Run Backup Now**, and **Quit** — no need to open the full
+window to check status or trigger a run.
+
+### Dark mode
+Automatically matches the system light/dark appearance at launch.
+
+---
 
 ## What it deliberately does NOT do
-- It does not reconfigure the proprietary sync engines of iCloud / Google Drive /
-  Dropbox / Proton Drive — those stay in their own apps. It has full control only
-  over the backup layer we built (the rsync job).
-- **iCloud Drive and Proton Drive cannot be added and will never show real cloud quota.**
-  Apple publishes no public API for iCloud storage, and Proton publishes none for Proton
-  Drive. This is a permanent limitation imposed by both providers, not a missing setup
-  step. Their tiles fall back to local disk free space. (Google Drive and Dropbox both
-  publish official REST APIs for quota, which is what **Cloud accounts…** uses.)
+- It does not reconfigure the proprietary sync engines of iCloud, Google Drive, Dropbox,
+  or Proton Drive — those stay in their own apps. It has full control only over the rsync
+  backup layer we built.
+- **iCloud Drive and Proton Drive will never show real cloud quota.** Apple and Proton
+  publish no public API for storage quota. This is a permanent provider limitation, not a
+  missing setup step. (Google Drive and Dropbox both publish official REST quota APIs,
+  which is what **Cloud accounts…** uses.)
+
+---
 
 ## How the nightly backup works
 
-The backup is triggered by an in-app timer, not by launchd directly launching the
-backup script. This is necessary because macOS 26 (Tahoe) removed `spctl --add` and
-blocks unsigned apps from being launched by launchd in non-interactive contexts.
+The backup is triggered by an in-app timer, **not** by launchd launching the app. This
+is required because macOS 26 (Tahoe) removed `spctl --add` and Gatekeeper blocks unsigned
+apps from being launched by launchd in non-interactive contexts.
 
 **Flow:**
-1. The app runs a 5-minute polling timer.
-2. On each tick (and 10 s after launch): if the nightly schedule is enabled, it's past
+1. App runs a 5-minute polling timer.
+2. On each tick (and 10 s after launch): if the nightly schedule is enabled, it is past
    03:30, and no backup has started today at or after 03:30 — the backup fires.
-3. The backup runs with the app's existing Full Disk Access grant; rsync can read all
-   your folders without any extra setup.
+3. The backup runs under the app's Full Disk Access grant; rsync reads all folders
+   without extra setup.
 
-**Implication:** the app must be running for the auto-backup to trigger. Leave it open
-overnight (it uses no CPU while idle) or set it as a Login Item in System Settings →
-General → Login Items so it opens automatically at login.
+**The app must be running for the auto-backup to fire.** Use the **🚀 Open at login**
+toggle in the Backup card to register it as a Login Item — this is the recommended setup.
+The app uses no CPU while idle.
 
 The launchd job (`com.andreas.gdrive-backup`) remains installed as a best-effort
-fallback (it would work if Apple ever re-allows unsigned-app launching from agents),
-but the reliable path on macOS 26 is the in-app timer.
+fallback for the day Apple re-allows launching unsigned apps from agents, but the
+reliable path on macOS 26 is the in-app timer.
+
+---
 
 ## Single-instance guard
-Opening a second GUI instance shows a native "Backup Control Center is already open"
-alert and brings the existing window to front. The single-instance guard does not
-interfere with the `--run-backup` headless mode used by launchd.
+Opening a second GUI instance shows a native alert ("Backup Control Center is already
+open") and brings the existing window to front. The guard does not affect the
+`--run-backup` headless mode used by the launchd fallback.
+
+---
 
 ## Credentials
 OAuth tokens and app credentials are stored in:
 ```
 ~/Library/Application Support/Backup Control Center/
 ```
-This location survives `.app` rebuilds. Never stored inside the bundle itself.
+This location survives `.app` rebuilds. Nothing is stored inside the bundle.
+
+---
 
 ## Full Disk Access
-The app needs Full Disk Access to let rsync read all your Documents subfolders.
-Grant it once in System Settings → Privacy & Security → Full Disk Access → + →
-select `/Applications/Backup Control Center.app`.
+The app needs Full Disk Access so rsync can read all your Documents subfolders.
 
-After each rebuild the code signature changes, so you must re-grant FDA. The app
-reminds you if it can't reach the backup destination.
+Grant it once:
+> System Settings → Privacy & Security → Full Disk Access → **+** →
+> select `/Applications/Backup Control Center.app`
 
-## Run (from source)
+**After each rebuild** the ad-hoc code signature changes, so FDA must be re-granted:
+remove the old entry and add the freshly built app. The app will warn you if it cannot
+reach the backup destination.
+
+---
+
+## Run from source
 ```bash
 cd ~/Documents/lab/active/backup_manager
 uv venv .venv && uv pip install -r requirements.txt
@@ -115,17 +145,22 @@ cd ~/Documents/lab/active/backup_manager
 ./build_app.sh
 ```
 Builds `Backup Control Center.app` with PyInstaller and installs it into `/Applications`.
-Re-run after any change to `main.py` or `cloud_quota.py`. After rebuilding, re-grant
-Full Disk Access (System Settings → Privacy & Security → Full Disk Access) since the
-code signature changes on each build.
+Re-run after any change to `main.py` or `cloud_quota.py`, then re-grant Full Disk Access.
 
-## Config it reads/writes
-- `~/Documents/lab/_Admin/backup/backup_folders.txt` — backed-up folders
-- `~/Documents/lab/_Admin/backup/gdrive_backup_excludes.txt` — rsync exclude patterns
-- `~/Documents/lab/_Admin/backup/backup_to_gdrive.sh` — the backup script
-- `~/Documents/lab/_Admin/backup/com.andreas.gdrive-backup.plist` — launchd fallback
-- `~/Documents/lab/_Admin/backup/logs/` — dated run logs
+---
+
+## Config files read/written
+| File | Purpose |
+|---|---|
+| `_Admin/backup/backup_folders.txt` | Which folders are backed up |
+| `_Admin/backup/gdrive_backup_excludes.txt` | rsync exclude patterns |
+| `_Admin/backup/backup_to_gdrive.sh` | The backup script (set `DRY_RUN=1` for a preview) |
+| `_Admin/backup/com.andreas.gdrive-backup.plist` | launchd fallback job |
+| `_Admin/backup/logs/backup_YYYY-MM-DD.log` | Dated run logs |
+| `_Admin/backup/logs/dryrun_*.log` | Dry-run output (not picked up by backup detection) |
+
+---
 
 ## Backlog
-- Proper Developer ID code signing (removes need for FDA re-grant after each rebuild and
-  enables launchd to launch the app directly)
+- Proper Developer ID code signing — removes the need to re-grant FDA after each rebuild
+  and would allow launchd to launch the app directly as a reliable fallback.
