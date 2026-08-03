@@ -27,7 +27,7 @@ if "--run-backup" in sys.argv:
     _script = Path.home() / "Documents" / "lab" / "_Admin" / "backup" / "backup_to_gdrive.sh"
     sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
 
-from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment
+from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent
 from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -847,9 +847,10 @@ class StorageCard(Card):
         subtitle.setObjectName("CardSubtitle")
         self.body(subtitle)
 
-        self.grid = QGridLayout()
-        self.grid.setSpacing(10)
-        self.body(self.grid)
+        self.tiles_row = QHBoxLayout()
+        self.tiles_row.setSpacing(10)
+        self.tiles_row.setContentsMargins(0, 0, 0, 0)
+        self.body(self.tiles_row)
         self.tiles = []
         self.refresh()
 
@@ -861,16 +862,16 @@ class StorageCard(Card):
     def refresh(self):
         for t in self.tiles:
             t.setParent(None)
+        # Remove the trailing stretch added by the previous refresh
+        while self.tiles_row.count():
+            self.tiles_row.takeAt(0)
         self.tiles = []
-        targets = [t for t in storage_targets() if t[2]]  # skip unmounted drives entirely
+        targets = [t for t in storage_targets() if t[2]]
         mounted_keys = {name for name, _path, _exists in targets}
-        cols = 3
-        i = 0
         for name, path, exists in targets:
             tile = StorageTile(name, path, exists, on_connect_request=self.connect_account)
-            self.grid.addWidget(tile, i // cols, i % cols)
+            self.tiles_row.addWidget(tile)
             self.tiles.append(tile)
-            i += 1
         for acc in cloud_quota.load_manual_accounts():
             if acc["key"] in mounted_keys:
                 continue
@@ -880,9 +881,9 @@ class StorageCard(Card):
                 provider_override=acc["provider"], display_account=acc["label"],
                 quota_only=True,
             )
-            self.grid.addWidget(tile, i // cols, i % cols)
+            self.tiles_row.addWidget(tile)
             self.tiles.append(tile)
-            i += 1
+        self.tiles_row.addStretch()
 
     def open_accounts_dialog(self):
         CloudAccountsDialog(self, on_change=self.refresh).exec()
