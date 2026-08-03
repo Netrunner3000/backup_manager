@@ -39,6 +39,10 @@ from PySide6.QtWidgets import (
 
 import cloud_quota
 
+# Set by main() before creating QApplication; used by widgets that need to
+# apply different inline styles for dark/light mode.
+_DARK: bool = False
+
 # ----------------------------------------------------------------------------
 # Paths / config
 # ----------------------------------------------------------------------------
@@ -62,209 +66,327 @@ DEST_ROOT = (CLOUD_DIR / "GoogleDrive-andreas.seel86@gmail.com" /
 # Style (dynamic — built once at startup based on system dark/light mode)
 # ----------------------------------------------------------------------------
 def build_app_style(dark: bool) -> str:
+    # iOS / macOS Human Interface Guideline palette
     if dark:
-        bg       = "#1c1e24"
-        card     = "#25272f"
-        text     = "#e2e4eb"
-        muted    = "#8b909e"
-        tile_fg  = "#c8ccd6"
-        sec_bg   = "#2e3038"
-        sec_hov  = "#383c45"
-        inp_bg   = "#1e2028"
-        inp_bdr  = "#3a3d47"
-        list_bg  = "#1e2028"
-        list_bdr = "#3a3d47"
-        bar_bg   = "#3a3d47"
-        dlg_bg   = "#1c1e24"
+        page     = "#1C1C1E"   # systemBackground (dark)
+        card     = "#2C2C2E"   # secondarySystemBackground (dark)
+        card_bdr = "#38383A"   # separator (dark)
+        text     = "#FFFFFF"   # label (dark)
+        sec      = "#98989D"   # secondaryLabel (dark)
+        tile_bg  = "#3A3A3C"   # tertiarySystemFill (dark)
+        tile_bdr = "#48484A"
+        acc      = "#0A84FF"   # systemBlue (dark)
+        acc_hov  = "#0070E0"
+        acc_prs  = "#005EC7"
+        sec_bg   = "#3A3A3C"   # systemFill (dark)
+        sec_hov  = "#48484A"
+        inp_bg   = "#2C2C2E"
+        inp_bdr  = "#48484A"
+        inp_foc  = "#0A84FF"
+        dis_bg   = "#2C2C2E"
+        dis_fg   = "#48484A"
+        link_clr = "#0A84FF"
+        link_hov = "#0A2A4A"
+        danger   = "#FF453A"   # systemRed (dark)
+        danger_h = "#D93830"
+        list_bg  = "#2C2C2E"
+        list_bdr = "#38383A"
+        sel_bg   = "#0A84FF33"
+        hdr_bg   = "#3A3A3C"
+        menu_bg  = "#2C2C2E"
+        menu_bdr = "#38383A"
     else:
-        bg       = "#f3f4f7"
-        card     = "#ffffff"
-        text     = "#1f2430"
-        muted    = "#6b7280"
-        tile_fg  = "#374151"
-        sec_bg   = "#eef0f6"
-        sec_hov  = "#e1e4ee"
-        inp_bg   = "#ffffff"
-        inp_bdr  = "#d1d5db"
-        list_bg  = "#fafbfc"
-        list_bdr = "#e5e7eb"
-        bar_bg   = "#e5e7eb"
-        dlg_bg   = "#f3f4f7"
+        page     = "#F2F2F7"   # systemBackground (light)
+        card     = "#FFFFFF"   # secondarySystemBackground (light)
+        card_bdr = "#C6C6C8"   # separator (light)
+        text     = "#1C1C1E"   # label (light)
+        sec      = "#636366"   # secondaryLabel (light)
+        tile_bg  = "#F9F9FB"   # tertiarySystemFill (light)
+        tile_bdr = "#E5E5EA"
+        acc      = "#007AFF"   # systemBlue (light)
+        acc_hov  = "#006BE0"
+        acc_prs  = "#005BC7"
+        sec_bg   = "#E5E5EA"   # systemFill (light)
+        sec_hov  = "#D1D1D6"
+        inp_bg   = "#FFFFFF"
+        inp_bdr  = "#C6C6C8"
+        inp_foc  = "#007AFF"
+        dis_bg   = "#E5E5EA"
+        dis_fg   = "#AEAEB2"
+        link_clr = "#007AFF"
+        link_hov = "#EFF6FF"
+        danger   = "#FF3B30"   # systemRed (light)
+        danger_h = "#E0342A"
+        list_bg  = "#FFFFFF"
+        list_bdr = "#E5E5EA"
+        sel_bg   = "#007AFF22"
+        hdr_bg   = "#F2F2F7"
+        menu_bg  = "#FFFFFF"
+        menu_bdr = "#C6C6C8"
 
     return f"""
 QWidget {{
-    background: {bg};
+    background: {page};
     color: {text};
     font-size: 13px;
 }}
 #ScrollArea, #ScrollContent {{
-    background: {bg};
+    background: {page};
     border: none;
 }}
+
+/* ── App header ─────────────────────────────────── */
 #AppTitle {{
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 700;
     color: {text};
+    letter-spacing: -0.3px;
 }}
 #AppSubtitle {{
-    color: {muted};
+    color: {sec};
     font-size: 12px;
 }}
+
+/* ── Cards ──────────────────────────────────────── */
 #Card {{
     background: {card};
-    border-radius: 14px;
+    border-radius: 12px;
+    border: 1px solid {card_bdr};
 }}
 #CardTitle {{
-    font-size: 14px;
-    font-weight: 700;
+    font-size: 13px;
+    font-weight: 600;
     color: {text};
+    letter-spacing: -0.1px;
 }}
 #CardSubtitle {{
-    color: {muted};
+    color: {sec};
     font-size: 11px;
+}}
+
+/* ── Storage tiles ──────────────────────────────── */
+#StorageTile {{
+    background: {tile_bg};
+    border-radius: 10px;
+    border: 1px solid {tile_bdr};
 }}
 #TileName {{
     font-weight: 600;
     font-size: 12px;
+    color: {text};
 }}
 #TileAccount {{
     font-size: 10px;
-    color: {muted};
+    color: {sec};
 }}
 #TileStatus {{
     font-size: 11px;
-    color: {muted};
+    color: {sec};
 }}
 #TileFree {{
     font-size: 11px;
-    color: {tile_fg};
+    color: {sec};
 }}
+
+/* ── Buttons — primary ──────────────────────────── */
 QPushButton {{
-    background: #2f6fed;
+    background: {acc};
     color: white;
     border: none;
     border-radius: 8px;
-    padding: 7px 14px;
+    padding: 7px 16px;
     font-weight: 600;
+    font-size: 13px;
 }}
 QPushButton:hover {{
-    background: #2860d6;
+    background: {acc_hov};
 }}
 QPushButton:pressed {{
-    background: #2050ba;
+    background: {acc_prs};
 }}
 QPushButton:disabled {{
-    background: {"#2a3550" if dark else "#c4cbe0"};
-    color: {"#4a5368" if dark else "#f0f1f5"};
+    background: {dis_bg};
+    color: {dis_fg};
 }}
+
+/* ── Buttons — secondary ────────────────────────── */
 QPushButton[secondary="true"] {{
     background: {sec_bg};
     color: {text};
+    border: none;
 }}
 QPushButton[secondary="true"]:hover {{
     background: {sec_hov};
 }}
+QPushButton[secondary="true"]:disabled {{
+    background: {dis_bg};
+    color: {dis_fg};
+}}
+
+/* ── Buttons — danger ───────────────────────────── */
 QPushButton[danger="true"] {{
-    background: #ef4444;
+    background: {danger};
     color: white;
 }}
 QPushButton[danger="true"]:hover {{
-    background: #dc2626;
+    background: {danger_h};
 }}
+
+/* ── Buttons — link / inline ────────────────────── */
 QPushButton[link="true"] {{
     background: transparent;
-    color: #2f6fed;
+    color: {link_clr};
     text-align: left;
-    padding: 6px 4px;
+    padding: 4px 2px;
     font-weight: 500;
+    border: none;
 }}
 QPushButton[link="true"]:hover {{
-    color: #1d4ed8;
-    background: {"#1e2a45" if dark else "#eef2ff"};
+    color: {acc_hov};
+    background: {link_hov};
+    border-radius: 4px;
 }}
+
+/* ── Lists & tables ─────────────────────────────── */
 QListWidget {{
     background: {list_bg};
     border: 1px solid {list_bdr};
     border-radius: 8px;
     padding: 4px;
+    outline: 0;
+}}
+QListWidget::item {{
+    border-radius: 5px;
+    padding: 3px 6px;
+}}
+QListWidget::item:selected {{
+    background: {sel_bg};
+    color: {text};
 }}
 QTableWidget {{
     background: {list_bg};
     border: 1px solid {list_bdr};
     border-radius: 8px;
     gridline-color: {list_bdr};
+    outline: 0;
 }}
 QTableWidget::item:selected {{
-    background: {"#1e3a5f" if dark else "#dbeafe"};
+    background: {sel_bg};
     color: {text};
 }}
 QHeaderView::section {{
-    background: {sec_bg};
-    color: {text};
+    background: {hdr_bg};
+    color: {sec};
     border: none;
-    padding: 4px 8px;
+    border-bottom: 1px solid {list_bdr};
+    padding: 5px 10px;
     font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
 }}
+
+/* ── Inputs ─────────────────────────────────────── */
 QLineEdit {{
     background: {inp_bg};
     color: {text};
     border: 1px solid {inp_bdr};
-    border-radius: 6px;
-    padding: 5px 8px;
+    border-radius: 8px;
+    padding: 6px 10px;
 }}
 QLineEdit:focus {{
-    border: 1px solid #2f6fed;
+    border: 1.5px solid {inp_foc};
 }}
+
+/* ── Dialogs ────────────────────────────────────── */
 QDialog {{
-    background: {dlg_bg};
+    background: {page};
 }}
+
+/* ── Log / code output (always dark terminal) ───── */
 QTextEdit, QPlainTextEdit {{
-    background: #11151c;
-    color: #d7dce3;
-    border: none;
+    background: #0D1117;
+    color: #C9D1D9;
+    border: 1px solid {"#30363D" if dark else "#D0D7DE"};
     border-radius: 8px;
-    font-family: Menlo, monospace;
+    font-family: Menlo, "SF Mono", Consolas, monospace;
     font-size: 11px;
+    padding: 4px;
 }}
+
+/* ── Progress bars ──────────────────────────────── */
 QProgressBar {{
     border: none;
-    border-radius: 5px;
-    background: {bar_bg};
-    height: 9px;
+    border-radius: 4px;
+    background: {tile_bdr};
+    height: 6px;
     text-align: center;
 }}
 QProgressBar::chunk {{
-    border-radius: 5px;
-    background: #2f6fed;
+    border-radius: 4px;
+    background: {acc};
 }}
+
+/* ── Menus ──────────────────────────────────────── */
 QMenu {{
-    background: {card};
+    background: {menu_bg};
     color: {text};
-    border: 1px solid {list_bdr};
-    border-radius: 6px;
+    border: 1px solid {menu_bdr};
+    border-radius: 8px;
     padding: 4px 0;
 }}
 QMenu::item {{
-    padding: 5px 18px;
+    padding: 6px 20px;
+    border-radius: 0px;
 }}
 QMenu::item:selected {{
-    background: #2f6fed;
+    background: {acc};
     color: white;
-    border-radius: 4px;
 }}
 QMenu::separator {{
     height: 1px;
-    background: {list_bdr};
+    background: {menu_bdr};
     margin: 3px 8px;
+}}
+
+/* ── Scroll bars (subtle) ───────────────────────── */
+QScrollBar:vertical {{
+    background: transparent;
+    width: 6px;
+    margin: 2px;
+}}
+QScrollBar::handle:vertical {{
+    background: {"#48484A" if dark else "#C6C6C8"};
+    border-radius: 3px;
+    min-height: 20px;
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: transparent;
+}}
+QScrollBar:horizontal {{
+    background: transparent;
+    height: 6px;
+    margin: 2px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {"#48484A" if dark else "#C6C6C8"};
+    border-radius: 3px;
+    min-width: 20px;
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0px;
 }}
 """
 
 
 def shadow():
     eff = QGraphicsDropShadowEffect()
-    eff.setBlurRadius(18)
-    eff.setOffset(0, 3)
-    eff.setColor(QColor(0, 0, 0, 30))
+    eff.setBlurRadius(12)
+    eff.setOffset(0, 2)
+    eff.setColor(QColor(0, 0, 0, 18))
     return eff
 
 
@@ -539,7 +661,7 @@ class StorageTile(QFrame):
         self._exists = exists
         self._worker = None
         self.setFixedWidth(TILE_WIDTH)
-        self.setStyleSheet("background: #fafbfc; border-radius: 10px;")
+        self.setObjectName("StorageTile")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
@@ -620,14 +742,15 @@ class StorageTile(QFrame):
     def _set_bar(self, pct_used):
         self.bar.setValue(pct_used)
         if pct_used >= 90:
-            color = "#ef4444"
+            color = "#FF453A" if _DARK else "#FF3B30"
         elif pct_used >= 70:
-            color = "#f59e0b"
+            color = "#FF9F0A" if _DARK else "#FF9500"
         else:
-            color = "#2f6fed"
+            color = "#0A84FF" if _DARK else "#007AFF"
+        bar_bg = "#48484A" if _DARK else "#E5E5EA"
         self.bar.setStyleSheet(
-            f"QProgressBar {{ border:none; border-radius:5px; background:#e5e7eb; height:9px; }}"
-            f"QProgressBar::chunk {{ border-radius:5px; background:{color}; }}"
+            f"QProgressBar {{ border:none; border-radius:4px; background:{bar_bg}; height:6px; }}"
+            f"QProgressBar::chunk {{ border-radius:4px; background:{color}; }}"
         )
 
     def set_usage(self, path, exists):
@@ -1541,6 +1664,26 @@ class ToolsCard(Card):
 
 
 # ----------------------------------------------------------------------------
+# Scroll area that yields wheel events to inner scrollable children
+# so scrolling a log box / folder list doesn't scroll the whole window.
+# ----------------------------------------------------------------------------
+class SmartScrollArea(QScrollArea):
+    _SCROLLABLES = (QTextEdit, QPlainTextEdit, QListWidget, QTableWidget)
+
+    def wheelEvent(self, event):
+        # Find the widget under the cursor
+        w = QApplication.widgetAt(event.globalPosition().toPoint())
+        while w is not None:
+            if isinstance(w, self._SCROLLABLES):
+                QApplication.sendEvent(w, event)
+                return
+            if w is self:
+                break
+            w = w.parent()
+        super().wheelEvent(event)
+
+
+# ----------------------------------------------------------------------------
 # Main window
 # ----------------------------------------------------------------------------
 class MainWindow(QMainWindow):
@@ -1550,7 +1693,7 @@ class MainWindow(QMainWindow):
         self.resize(1000, 880)
         self.setMinimumWidth(900)
 
-        scroll = QScrollArea()
+        scroll = SmartScrollArea()
         scroll.setObjectName("ScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -1695,9 +1838,10 @@ def main():
         )
         sys.exit(0)
 
+    global _DARK
+    _DARK = _system_dark_mode()
     app = QApplication(sys.argv)
-    dark = _system_dark_mode()
-    app.setStyleSheet(build_app_style(dark))
+    app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
