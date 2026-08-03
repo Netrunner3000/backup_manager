@@ -27,13 +27,14 @@ if "--run-backup" in sys.argv:
     _script = Path.home() / "Documents" / "lab" / "_Admin" / "backup" / "backup_to_gdrive.sh"
     sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
 
-from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer
-from PySide6.QtGui import QTextCursor, QColor
+from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment
+from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QTextEdit, QTextBrowser, QFileDialog, QMessageBox, QDialog,
     QPlainTextEdit, QListWidgetItem, QFrame, QScrollArea, QProgressBar,
     QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QFormLayout, QComboBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon, QMenu,
 )
 
 import cloud_quota
@@ -58,136 +59,204 @@ DEST_ROOT = (CLOUD_DIR / "GoogleDrive-andreas.seel86@gmail.com" /
 
 
 # ----------------------------------------------------------------------------
-# Style
+# Style (dynamic — built once at startup based on system dark/light mode)
 # ----------------------------------------------------------------------------
-APP_STYLE = """
-QWidget {
-    background: #f3f4f7;
-    color: #1f2430;
+def build_app_style(dark: bool) -> str:
+    if dark:
+        bg       = "#1c1e24"
+        card     = "#25272f"
+        text     = "#e2e4eb"
+        muted    = "#8b909e"
+        tile_fg  = "#c8ccd6"
+        sec_bg   = "#2e3038"
+        sec_hov  = "#383c45"
+        inp_bg   = "#1e2028"
+        inp_bdr  = "#3a3d47"
+        list_bg  = "#1e2028"
+        list_bdr = "#3a3d47"
+        bar_bg   = "#3a3d47"
+        dlg_bg   = "#1c1e24"
+    else:
+        bg       = "#f3f4f7"
+        card     = "#ffffff"
+        text     = "#1f2430"
+        muted    = "#6b7280"
+        tile_fg  = "#374151"
+        sec_bg   = "#eef0f6"
+        sec_hov  = "#e1e4ee"
+        inp_bg   = "#ffffff"
+        inp_bdr  = "#d1d5db"
+        list_bg  = "#fafbfc"
+        list_bdr = "#e5e7eb"
+        bar_bg   = "#e5e7eb"
+        dlg_bg   = "#f3f4f7"
+
+    return f"""
+QWidget {{
+    background: {bg};
+    color: {text};
     font-size: 13px;
-}
-#ScrollArea, #ScrollContent {
-    background: #f3f4f7;
+}}
+#ScrollArea, #ScrollContent {{
+    background: {bg};
     border: none;
-}
-#AppTitle {
+}}
+#AppTitle {{
     font-size: 22px;
     font-weight: 700;
-    color: #1f2430;
-}
-#AppSubtitle {
-    color: #6b7280;
+    color: {text};
+}}
+#AppSubtitle {{
+    color: {muted};
     font-size: 12px;
-}
-#Card {
-    background: #ffffff;
+}}
+#Card {{
+    background: {card};
     border-radius: 14px;
-}
-#CardTitle {
+}}
+#CardTitle {{
     font-size: 14px;
     font-weight: 700;
-    color: #1f2430;
-}
-#CardSubtitle {
-    color: #6b7280;
+    color: {text};
+}}
+#CardSubtitle {{
+    color: {muted};
     font-size: 11px;
-}
-#TileName {
+}}
+#TileName {{
     font-weight: 600;
     font-size: 12px;
-}
-#TileAccount {
+}}
+#TileAccount {{
     font-size: 10px;
-    color: #6b7280;
-}
-#TileStatus {
+    color: {muted};
+}}
+#TileStatus {{
     font-size: 11px;
-    color: #6b7280;
-}
-#TileFree {
+    color: {muted};
+}}
+#TileFree {{
     font-size: 11px;
-    color: #374151;
-}
-QPushButton {
+    color: {tile_fg};
+}}
+QPushButton {{
     background: #2f6fed;
     color: white;
     border: none;
     border-radius: 8px;
     padding: 7px 14px;
     font-weight: 600;
-}
-QPushButton:hover {
+}}
+QPushButton:hover {{
     background: #2860d6;
-}
-QPushButton:pressed {
+}}
+QPushButton:pressed {{
     background: #2050ba;
-}
-QPushButton:disabled {
-    background: #c4cbe0;
-    color: #f0f1f5;
-}
-QPushButton[secondary="true"] {
-    background: #eef0f6;
-    color: #1f2430;
-}
-QPushButton[secondary="true"]:hover {
-    background: #e1e4ee;
-}
-QPushButton[danger="true"] {
+}}
+QPushButton:disabled {{
+    background: {"#2a3550" if dark else "#c4cbe0"};
+    color: {"#4a5368" if dark else "#f0f1f5"};
+}}
+QPushButton[secondary="true"] {{
+    background: {sec_bg};
+    color: {text};
+}}
+QPushButton[secondary="true"]:hover {{
+    background: {sec_hov};
+}}
+QPushButton[danger="true"] {{
     background: #ef4444;
-}
-QPushButton[danger="true"]:hover {
+    color: white;
+}}
+QPushButton[danger="true"]:hover {{
     background: #dc2626;
-}
-QPushButton[link="true"] {
+}}
+QPushButton[link="true"] {{
     background: transparent;
     color: #2f6fed;
     text-align: left;
     padding: 6px 4px;
     font-weight: 500;
-}
-QPushButton[link="true"]:hover {
+}}
+QPushButton[link="true"]:hover {{
     color: #1d4ed8;
-    background: #eef2ff;
-}
-QListWidget {
-    background: #fafbfc;
-    border: 1px solid #e5e7eb;
+    background: {"#1e2a45" if dark else "#eef2ff"};
+}}
+QListWidget {{
+    background: {list_bg};
+    border: 1px solid {list_bdr};
     border-radius: 8px;
     padding: 4px;
-}
-QLineEdit {
-    background: #ffffff;
-    color: #1f2430;
-    border: 1px solid #d1d5db;
+}}
+QTableWidget {{
+    background: {list_bg};
+    border: 1px solid {list_bdr};
+    border-radius: 8px;
+    gridline-color: {list_bdr};
+}}
+QTableWidget::item:selected {{
+    background: {"#1e3a5f" if dark else "#dbeafe"};
+    color: {text};
+}}
+QHeaderView::section {{
+    background: {sec_bg};
+    color: {text};
+    border: none;
+    padding: 4px 8px;
+    font-weight: 600;
+}}
+QLineEdit {{
+    background: {inp_bg};
+    color: {text};
+    border: 1px solid {inp_bdr};
     border-radius: 6px;
     padding: 5px 8px;
-}
-QLineEdit:focus {
+}}
+QLineEdit:focus {{
     border: 1px solid #2f6fed;
-}
-QDialog {
-    background: #f3f4f7;
-}
-QTextEdit, QPlainTextEdit {
+}}
+QDialog {{
+    background: {dlg_bg};
+}}
+QTextEdit, QPlainTextEdit {{
     background: #11151c;
     color: #d7dce3;
     border: none;
     border-radius: 8px;
     font-family: Menlo, monospace;
     font-size: 11px;
-}
-QProgressBar {
+}}
+QProgressBar {{
     border: none;
     border-radius: 5px;
-    background: #e5e7eb;
+    background: {bar_bg};
     height: 9px;
     text-align: center;
-}
-QProgressBar::chunk {
+}}
+QProgressBar::chunk {{
     border-radius: 5px;
     background: #2f6fed;
-}
+}}
+QMenu {{
+    background: {card};
+    color: {text};
+    border: 1px solid {list_bdr};
+    border-radius: 6px;
+    padding: 4px 0;
+}}
+QMenu::item {{
+    padding: 5px 18px;
+}}
+QMenu::item:selected {{
+    background: #2f6fed;
+    color: white;
+    border-radius: 4px;
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {list_bdr};
+    margin: 3px 8px;
+}}
 """
 
 
@@ -378,6 +447,54 @@ def last_backup_info():
     match = re.search(r"\[([\d-]{10} [\d:]{8})\]\s+===== Backup run finished", text)
     timestamp = match.group(1) if match else Path(latest).stem.replace("backup_", "")
     return f"Last run: {timestamp}  —  {status}", latest
+
+
+def last_backup_age_hours() -> float | None:
+    """Hours since the last successful backup finished, or None if no record."""
+    logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")))
+    for log_path in reversed(logs):
+        text = Path(log_path).read_text(errors="replace")
+        m = re.search(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+===== Backup run finished OK", text)
+        if m:
+            try:
+                t = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+                return (datetime.now() - t).total_seconds() / 3600
+            except ValueError:
+                pass
+    return None
+
+
+def _system_dark_mode() -> bool:
+    rc, out, _ = run_cmd(["defaults", "read", "-g", "AppleInterfaceStyle"], timeout=5)
+    return out.strip().lower() == "dark"
+
+
+def _notify(title: str, message: str, subtitle: str = "") -> None:
+    sub = f'subtitle "{subtitle}" ' if subtitle else ""
+    subprocess.Popen(
+        ["osascript", "-e",
+         f'display notification "{message}" with title "{title}" {sub}'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
+def is_login_item() -> bool:
+    rc, out, _ = run_cmd(
+        ["osascript", "-e",
+         'tell application "System Events" to return (name of login items) contains "Backup Control Center"'],
+        timeout=10,
+    )
+    return out.strip().lower() == "true"
+
+
+def set_login_item(enable: bool) -> tuple:
+    if enable:
+        script = ('tell application "System Events" to make new login item at end '
+                  'with properties {path:"/Applications/Backup Control Center.app", hidden:false}')
+    else:
+        script = 'tell application "System Events" to delete login item "Backup Control Center"'
+    rc, _, err = run_cmd(["osascript", "-e", script], timeout=10)
+    return rc == 0, err
 
 
 # ----------------------------------------------------------------------------
@@ -602,6 +719,11 @@ class StorageCard(Card):
         self.body(self.grid)
         self.tiles = []
         self.refresh()
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(5 * 60 * 1000)
+        self._refresh_timer.timeout.connect(self.refresh)
+        self._refresh_timer.start()
 
     def refresh(self):
         for t in self.tiles:
@@ -908,12 +1030,83 @@ class ExcludesDialog(QDialog):
 
 
 # ----------------------------------------------------------------------------
+# Backup history dialog
+# ----------------------------------------------------------------------------
+class BackupHistoryDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Backup History")
+        self.resize(600, 360)
+        layout = QVBoxLayout(self)
+
+        table = QTableWidget()
+        table.setColumnCount(4)
+        table.setHorizontalHeaderLabels(["Date", "Started", "Duration", "Status"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.verticalHeader().setVisible(False)
+        table.setAlternatingRowColors(True)
+
+        runs = self._parse_runs()
+        table.setRowCount(len(runs))
+        for r, (date, started, duration, status) in enumerate(runs):
+            for c, val in enumerate([date, started, duration, status]):
+                item = QTableWidgetItem(val)
+                if c == 3:
+                    item.setForeground(
+                        QColor("#16a34a") if val == "OK"
+                        else QColor("#dc2626") if val == "ERRORS"
+                        else QColor("#9ca3af")
+                    )
+                table.setItem(r, c, item)
+
+        layout.addWidget(table)
+
+        row = QHBoxLayout()
+        row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+    def _parse_runs(self):
+        logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True)[:15]
+        runs = []
+        for log_path in logs:
+            text = Path(log_path).read_text(errors="replace")
+            sm = re.search(
+                r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\] ===== Backup run started", text)
+            em = re.search(
+                r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\] ===== Backup run finished", text)
+            if not sm:
+                continue
+            date, started = sm.group(1), sm.group(2)
+            duration = "—"
+            if em:
+                try:
+                    t0 = datetime.strptime(f"{sm.group(1)} {sm.group(2)}", "%Y-%m-%d %H:%M:%S")
+                    t1 = datetime.strptime(f"{em.group(1)} {em.group(2)}", "%Y-%m-%d %H:%M:%S")
+                    secs = int((t1 - t0).total_seconds())
+                    duration = f"{secs // 60}m {secs % 60}s"
+                except ValueError:
+                    pass
+            status = "OK" if "finished OK" in text else "ERRORS" if "WITH ERRORS" in text else "—"
+            runs.append((date, started, duration, status))
+        return runs
+
+
+# ----------------------------------------------------------------------------
 # Backup status & schedule card
 # ----------------------------------------------------------------------------
 class BackupStatusCard(Card):
     def __init__(self):
         super().__init__("Google Drive Backup", "Status, schedule, and manual run")
         self.proc = None
+        self._dry_run = False
 
         info, _ = last_backup_info()
         self.status_lbl = QLabel(info)
@@ -937,16 +1130,31 @@ class BackupStatusCard(Card):
         wake.addWidget(self.wake_btn)
         self.body(wake)
 
+        login = QHBoxLayout()
+        self.login_lbl = QLabel()
+        self.login_btn = secondary_button("")
+        self.login_btn.clicked.connect(self.toggle_login_item)
+        login.addWidget(self.login_lbl)
+        login.addStretch()
+        login.addWidget(self.login_btn)
+        self.body(login)
+
         runrow = QHBoxLayout()
         self.run_btn = QPushButton("▶  Run backup now")
         self.run_btn.clicked.connect(self.run_backup)
+        self.dry_btn = secondary_button("⚟  Dry run")
+        self.dry_btn.clicked.connect(self.run_dry_run)
         self.stop_btn = secondary_button("■  Stop")
         self.stop_btn.setProperty("danger", True)
         self.stop_btn.clicked.connect(self.stop_backup)
         self.stop_btn.setEnabled(False)
+        self.history_btn = secondary_button("📋 History")
+        self.history_btn.clicked.connect(lambda: BackupHistoryDialog(self).exec())
         runrow.addWidget(self.run_btn)
+        runrow.addWidget(self.dry_btn)
         runrow.addWidget(self.stop_btn)
         runrow.addStretch()
+        runrow.addWidget(self.history_btn)
         self.body(runrow)
 
         self.log = QTextEdit()
@@ -956,6 +1164,7 @@ class BackupStatusCard(Card):
 
         self.refresh_schedule()
         self.refresh_wake()
+        self.refresh_login_item()
 
         # Poll every 5 min so auto-backup fires shortly after 03:30 on wake.
         self._auto_timer = QTimer(self)
@@ -967,22 +1176,39 @@ class BackupStatusCard(Card):
 
     def _maybe_auto_backup(self):
         """Run the backup automatically if the schedule is on, it's past 03:30,
-        and no backup has run since 03:30 today."""
+        and no backup has run since 03:30 today. Also notifies if >25 h overdue."""
         if self.proc is not None:
             return  # already running
         if not launchd_loaded():
-            return  # user disabled the schedule
+            # Even if schedule is off, warn if backup is very overdue.
+            age = last_backup_age_hours()
+            if age is not None and age > 25:
+                _notify(
+                    "Backup Control Center",
+                    f"Last backup was {int(age)}h ago — schedule is disabled.",
+                    "Backup overdue",
+                )
+            return
 
         now = datetime.now()
         if now.hour < 3 or (now.hour == 3 and now.minute < 30):
-            return  # too early — wait until after 03:30
+            # Before the backup window: warn if it's been >25 h since last successful run.
+            age = last_backup_age_hours()
+            if age is not None and age > 25:
+                _notify(
+                    "Backup Control Center",
+                    f"Last successful backup was {int(age)}h ago.",
+                    "Backup overdue",
+                )
+            return
 
-        # Check if a backup log exists for today with a timestamp >= 03:30.
+        # Past 03:30 — check if a backup log exists for today with a timestamp >= 03:30.
         today_log = LOG_DIR / f"backup_{now.date()}.log"
         if today_log.exists():
             text = today_log.read_text(errors="replace")
-            # Look for a run that started at or after 03:30
-            for m in re.finditer(r"\[(\d{4}-\d{2}-\d{2} (\d{2}):(\d{2}):\d{2})\] ===== Backup run started", text):
+            for m in re.finditer(
+                r"\[(\d{4}-\d{2}-\d{2} (\d{2}):(\d{2}):\d{2})\] ===== Backup run started", text
+            ):
                 h, mi = int(m.group(2)), int(m.group(3))
                 if h > 3 or (h == 3 and mi >= 30):
                     return  # already ran today after 03:30
@@ -1003,6 +1229,18 @@ class BackupStatusCard(Card):
         self.wake_lbl.setText(
             "⏰ Wake Mac at 03:25 for backup: " + ("ENABLED" if active else "disabled"))
         self.wake_btn.setText("Disable" if active else "Enable")
+
+    def refresh_login_item(self):
+        is_item = is_login_item()
+        self.login_lbl.setText("🚀 Open at login: " + ("ENABLED" if is_item else "disabled"))
+        self.login_btn.setText("Disable" if is_item else "Enable")
+
+    def toggle_login_item(self):
+        is_item = is_login_item()
+        ok, err = set_login_item(not is_item)
+        if not ok and err and "User cancelled" not in err:
+            QMessageBox.warning(self, "Login Item", f"Could not change login item:\n{err}")
+        self.refresh_login_item()
 
     def toggle_wake(self):
         if wake_schedule_active():
@@ -1029,12 +1267,34 @@ class BackupStatusCard(Card):
     def run_backup(self):
         if self.proc is not None:
             return
+        self._dry_run = False
         self.log.clear()
         self.proc = QProcess(self)
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self._read_output)
         self.proc.finished.connect(self._finished)
         self.run_btn.setEnabled(False)
+        self.dry_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.proc.start("/bin/bash", [str(SCRIPT)])
+
+    def run_dry_run(self):
+        if self.proc is not None:
+            QMessageBox.information(self, "Busy",
+                                    "Stop the running backup before starting a dry run.")
+            return
+        self._dry_run = True
+        self.log.clear()
+        self.log.insertPlainText("=== DRY RUN — no files will be changed ===\n\n")
+        self.proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("DRY_RUN", "1")
+        self.proc.setProcessEnvironment(env)
+        self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self._read_output)
+        self.proc.finished.connect(self._finished)
+        self.run_btn.setEnabled(False)
+        self.dry_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.proc.start("/bin/bash", [str(SCRIPT)])
 
@@ -1050,10 +1310,19 @@ class BackupStatusCard(Card):
         self.log.insertPlainText(data)
 
     def _finished(self):
+        was_dry = self._dry_run
+        self._dry_run = False
         self.run_btn.setEnabled(True)
+        self.dry_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.proc = None
         self.refresh_status()
+        if not was_dry:
+            info, _ = last_backup_info()
+            if "OK" in info:
+                _notify("Backup Control Center", "Backup completed successfully.", "Google Drive Backup")
+            elif "ERRORS" in info:
+                _notify("Backup Control Center", "Backup finished with errors — check the log.", "Google Drive Backup")
 
 
 # ----------------------------------------------------------------------------
@@ -1116,6 +1385,15 @@ class FoldersCard(Card):
     def remove_folder(self):
         item = self.list.currentItem()
         if not item:
+            return
+        folder_name = item.text()
+        answer = QMessageBox.question(
+            self, "Remove folder",
+            f'Remove “{folder_name}” from the backup?\n\nFiles already in Google Drive are not deleted.',
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
             return
         folders = [f for f in read_folders() if f != item.text()]
         write_folders(folders)
@@ -1202,13 +1480,64 @@ class ToolsCard(Card):
              lambda: run_cmd(["open", "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings"])),
         ]
 
+        extras = [
+            ("Google Photos Takeout…", self._google_photos_help),
+            ("Proton vault status", self._proton_vault_check),
+            ("Time Machine: back up now",
+             lambda: run_cmd(["tmutil", "startbackup"])),
+        ]
+
         grid.addLayout(col("Open locations", locations), 0, 0)
         grid.addLayout(col("Documentation", docs), 0, 1)
         grid.addLayout(col("Account pages", accounts), 0, 2)
+        grid.addLayout(col("Tools", extras), 1, 0)
         self.body(grid)
 
     def open_doc(self, title, path):
         DocViewerDialog(self, title, path).exec()
+
+    def _google_photos_help(self):
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Google Photos Takeout → Mac")
+        msg.setText(
+            "How to download your Google Photos library to this Mac:\n\n"
+            "1.  Open takeout.google.com → Deselect all → tick Google Photos only.\n"
+            "2.  Choose file type (.zip), frequency (once), and max size (2 GB).\n"
+            "3.  Download the ZIP(s) when the email arrives.\n"
+            "4.  Open the Photos app → File → Import → select the extracted folders.\n"
+            "5.  After import, run Time Machine to include the Photos library in your\n"
+            "    local backup.\n\n"
+            "Tip: use 'google-photos-takeout-helper' (pip install) to merge multiple\n"
+            "Takeout ZIPs into a single date-organised folder before importing."
+        )
+        msg.addButton("Open takeout.google.com", QMessageBox.ActionRole).clicked.connect(
+            lambda: run_cmd(["open", "https://takeout.google.com"]))
+        msg.addButton("Close", QMessageBox.RejectRole)
+        msg.exec()
+
+    def _proton_vault_check(self):
+        vault_candidates = list(CLOUD_DIR.glob("ProtonDrive-*")) if CLOUD_DIR.exists() else []
+        if not vault_candidates:
+            QMessageBox.warning(self, "Proton Drive",
+                                "No Proton Drive folder found in ~/Library/CloudStorage.\n"
+                                "Is the Proton Drive desktop app running?")
+            return
+        issues = []
+        for vault_path in vault_candidates:
+            try:
+                entries = list(vault_path.iterdir())
+                if not entries:
+                    issues.append(f"{vault_path.name}: folder is empty (not synced?).")
+            except PermissionError:
+                issues.append(f"{vault_path.name}: permission denied — check Full Disk Access.")
+            except OSError as e:
+                issues.append(f"{vault_path.name}: {e}")
+        if issues:
+            QMessageBox.warning(self, "Proton Drive", "\n".join(issues))
+        else:
+            names = ", ".join(p.name for p in vault_candidates)
+            QMessageBox.information(self, "Proton Drive",
+                                    f"Proton Drive appears accessible:\n{names}")
 
 
 # ----------------------------------------------------------------------------
@@ -1262,11 +1591,75 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
         self.setCentralWidget(scroll)
 
+        # Tray icon — patch backup_card._finished to keep tray in sync.
+        self.tray = BackupTrayIcon(self)
+        original_finished = self.backup_card._finished
+
+        def _patched_finished():
+            original_finished()
+            self.tray.update_status()
+
+        self.backup_card._finished = _patched_finished
+
     def refresh_all(self):
         self.storage_card.refresh()
         self.backup_card.refresh_status()
         self.backup_card.refresh_schedule()
         self.folders_card.reload_folders()
+        self.tray.update_status()
+
+
+# ----------------------------------------------------------------------------
+# Menu-bar / system-tray companion
+# ----------------------------------------------------------------------------
+class BackupTrayIcon(QSystemTrayIcon):
+    def __init__(self, window):
+        super().__init__()
+        self._window = window
+
+        # Use the app's icon asset if available, fall back to a built-in stock icon.
+        icon_path = Path(__file__).resolve().parent / "assets" / "icon.icns"
+        if icon_path.exists():
+            self.setIcon(QIcon(str(icon_path)))
+        else:
+            self.setIcon(QIcon.fromTheme("document-save",
+                         QApplication.style().standardIcon(
+                             QApplication.style().StandardPixmap.SP_DriveHDIcon)))
+
+        menu = QMenu()
+        self._status_action = menu.addAction("Checking…")
+        self._status_action.setEnabled(False)
+        menu.addSeparator()
+        show_action = menu.addAction("Show Backup Control Center")
+        show_action.triggered.connect(self._show_window)
+        run_action = menu.addAction("Run Backup Now")
+        run_action.triggered.connect(lambda: (self._show_window(),
+                                              window.backup_card.run_backup()))
+        menu.addSeparator()
+        quit_action = menu.addAction("Quit")
+        quit_action.triggered.connect(QApplication.quit)
+        self.setContextMenu(menu)
+
+        self.activated.connect(self._activated)
+        self.update_status()
+        self.show()
+
+    def update_status(self, info: str | None = None):
+        if info is None:
+            info, _ = last_backup_info()
+        short = info.replace("Last run: ", "").replace("No backups run yet.", "Never backed up")
+        self.setToolTip(f"Backup Control Center\n{short}")
+        self._status_action.setText(short)
+
+    def _show_window(self):
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
+
+    def _activated(self, reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._show_window()
 
 
 _INSTANCE_LOCK_FILE = cloud_quota.SECRETS_DIR / "gui.lock"
@@ -1303,7 +1696,8 @@ def main():
         sys.exit(0)
 
     app = QApplication(sys.argv)
-    app.setStyleSheet(APP_STYLE)
+    dark = _system_dark_mode()
+    app.setStyleSheet(build_app_style(dark))
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
