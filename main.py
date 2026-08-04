@@ -60,6 +60,13 @@ CLOUD_DIR = HOME / "Library" / "CloudStorage"
 ICLOUD_DIR = HOME / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
 DEST_ROOT = (CLOUD_DIR / "GoogleDrive-andreas.seel86@gmail.com" /
              "My Drive" / "Backups" / "MacBook" / "Documents")
+LAB_ACTIVE = DOCS / "lab" / "active"
+# Same disposable-junk names as gdrive_backup_excludes.txt — if it's not worth
+# backing up, it's not worth keeping locally once the project is idle either.
+DISPOSABLE_DIR_NAMES = {
+    ".venv", "venv", "env", "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", "node_modules", ".cache", "dist", "build",
+}
 
 
 # ----------------------------------------------------------------------------
@@ -652,6 +659,83 @@ class SizeWorker(QThread):
                 except ValueError:
                     pass
         self.done.emit(sizes, human_size(total))
+
+
+class LabHealthWorker(QThread):
+    """Scans lab/active/<project> for disk hogs, git hygiene, and missing manifests."""
+    done = Signal(list)  # list of row dicts
+
+    def run(self):
+        rows = []
+        if LAB_ACTIVE.exists():
+            for proj in sorted(LAB_ACTIVE.iterdir()):
+                if proj.is_dir() and not proj.name.startswith("."):
+                    rows.append(self._scan_project(proj))
+        self.done.emit(rows)
+
+    @classmethod
+    def _scan_project(cls, proj):
+        total_kb = cls._size_kb(proj)
+        reclaim_items = [(p, cls._size_kb(p)) for p in cls._find_disposable(proj)]
+        reclaim_kb = sum(kb for _, kb in reclaim_items)
+
+        has_git = (proj / ".git").is_dir()
+        uncommitted, last_commit = 0, "—"
+        if has_git:
+            _, out, _ = run_cmd(["git", "-C", str(proj), "status", "--porcelain"], timeout=20)
+            uncommitted = len([l for l in out.splitlines() if l.strip()])
+            _, out2, _ = run_cmd(
+                ["git", "-C", str(proj), "log", "-1", "--format=%ad", "--date=short"], timeout=20)
+            last_commit = out2.strip() or "—"
+
+        has_manifest = (proj / "requirements.txt").exists() or (proj / "pyproject.toml").exists()
+
+        env_flag = ""
+        if (proj / ".env").exists():
+            if has_git:
+                rc, _, _ = run_cmd(["git", "-C", str(proj), "check-ignore", "-q", ".env"], timeout=10)
+                env_flag = "" if rc == 0 else "⚠️ .env not git-ignored"
+            else:
+                env_flag = ".env present (no git repo to check)"
+
+        return {
+            "name": proj.name,
+            "total_kb": total_kb,
+            "reclaim_kb": reclaim_kb,
+            "reclaim_items": reclaim_items,
+            "has_git": has_git,
+            "uncommitted": uncommitted,
+            "last_commit": last_commit,
+            "has_manifest": has_manifest,
+            "env_flag": env_flag,
+        }
+
+    @staticmethod
+    def _size_kb(path):
+        rc, out, _ = run_cmd(["du", "-sk", str(path)], timeout=120)
+        if rc == 0 and out:
+            try:
+                return int(out.split("\t", 1)[0])
+            except ValueError:
+                pass
+        return 0
+
+    @staticmethod
+    def _find_disposable(proj):
+        """Top-most matching dirs only (-prune) so nested __pycache__ inside a
+        .venv isn't counted twice, and every match is independently rm-able."""
+        names = sorted(DISPOSABLE_DIR_NAMES)
+        name_expr = []
+        for i, n in enumerate(names):
+            if i:
+                name_expr.append("-o")
+            name_expr += ["-name", n]
+        args = ["find", str(proj), "-mindepth", "1", "-type", "d",
+                "(", *name_expr, ")", "-prune", "-print"]
+        rc, out, _ = run_cmd(args, timeout=60)
+        if rc != 0:
+            return []
+        return [Path(p) for p in out.splitlines() if p.strip()]
 
 
 # ----------------------------------------------------------------------------
@@ -1537,6 +1621,140 @@ class FoldersCard(Card):
         ExcludesDialog(self).exec()
 
 
+class LabHealthCard(Card):
+    def __init__(self):
+        super().__init__("Lab Health", "Disk usage, git status, and reclaimable space per active project")
+        self.summary_lbl = QLabel("Scanning…")
+        self.summary_lbl.setObjectName("CardSubtitle")
+        self.body(self.summary_lbl)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(
+            ["", "Project", "Total", "Reclaimable", "Git", "Manifest / .env"])
+        header = self.table.horizontalHeader()
+        for col in range(5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setMinimumHeight(280)
+        self.body(self.table)
+
+        row = QHBoxLayout()
+        rescan = secondary_button("🔄 Rescan")
+        rescan.clicked.connect(self.rescan)
+        clean = secondary_button("🧹 Clean up checked")
+        clean.clicked.connect(self.clean_checked)
+        row.addWidget(rescan)
+        row.addWidget(clean)
+        row.addStretch()
+        self.body(row)
+
+        hint = QLabel(
+            "Reclaimable = .venv, build, dist, __pycache__ and similar — git-ignored, "
+            "excluded from the Drive backup, and rebuildable with uv sync / pip install.")
+        hint.setObjectName("CardSubtitle")
+        hint.setWordWrap(True)
+        self.body(hint)
+
+        self._rows = []
+        self.rescan()
+
+    def rescan(self):
+        self.summary_lbl.setText("Scanning…")
+        self.worker = LabHealthWorker()
+        self.worker.done.connect(self._populate)
+        self.worker.start()
+
+    def _populate(self, rows):
+        self._rows = rows
+        self.table.setRowCount(len(rows))
+        total_reclaim_kb = 0
+
+        for r, row in enumerate(rows):
+            chk = QTableWidgetItem()
+            if row["reclaim_kb"] > 0:
+                chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                chk.setCheckState(Qt.Checked)
+            else:
+                chk.setFlags(Qt.NoItemFlags)
+            self.table.setItem(r, 0, chk)
+
+            self.table.setItem(r, 1, QTableWidgetItem(row["name"]))
+            self.table.setItem(r, 2, QTableWidgetItem(human_size(row["total_kb"] * 1024)))
+            self.table.setItem(
+                r, 3, QTableWidgetItem(
+                    human_size(row["reclaim_kb"] * 1024) if row["reclaim_kb"] else "—"))
+            total_reclaim_kb += row["reclaim_kb"]
+
+            if not row["has_git"]:
+                git_text, git_color = "no git repo", "#dc2626"
+            elif row["uncommitted"]:
+                git_text, git_color = f"{row['uncommitted']} uncommitted", "#d97706"
+            else:
+                git_text, git_color = f"clean ({row['last_commit']})", "#16a34a"
+            git_item = QTableWidgetItem(git_text)
+            git_item.setForeground(QColor(git_color))
+            self.table.setItem(r, 4, git_item)
+
+            notes = [] if row["has_manifest"] else ["⚠️ no requirements.txt / pyproject.toml"]
+            if row["env_flag"]:
+                notes.append(row["env_flag"])
+            notes_item = QTableWidgetItem("; ".join(notes) if notes else "—")
+            if notes:
+                notes_item.setForeground(QColor("#d97706"))
+            self.table.setItem(r, 5, notes_item)
+
+        n_reclaim = sum(1 for row in rows if row["reclaim_kb"] > 0)
+        self.summary_lbl.setText(
+            f"{human_size(total_reclaim_kb * 1024)} reclaimable across {n_reclaim} of "
+            f"{len(rows)} projects"
+        )
+
+    def clean_checked(self):
+        targets = []  # (project_name, path, kb)
+        for r, row in enumerate(self._rows):
+            item = self.table.item(r, 0)
+            if item and item.flags() & Qt.ItemIsUserCheckable and item.checkState() == Qt.Checked:
+                for p, kb in row["reclaim_items"]:
+                    targets.append((row["name"], p, kb))
+
+        if not targets:
+            QMessageBox.information(
+                self, "Nothing to clean", "No checked projects have reclaimable space.")
+            return
+
+        total_kb = sum(kb for _, _, kb in targets)
+        listing = "\n".join(f"  {name}/{p.name}  ({human_size(kb * 1024)})"
+                             for name, p, kb in targets[:20])
+        if len(targets) > 20:
+            listing += f"\n  … and {len(targets) - 20} more"
+        answer = QMessageBox.question(
+            self, "Clean up disposable folders",
+            f"Delete these {len(targets)} folders, reclaiming "
+            f"{human_size(total_kb * 1024)}?\n\n{listing}\n\n"
+            "These are git-ignored and excluded from the Drive backup — rebuild with "
+            "uv sync / pip install -r requirements.txt when you next need them.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        errors = []
+        for name, p, _ in targets:
+            try:
+                shutil.rmtree(p)
+            except Exception as e:
+                errors.append(f"{name}/{p.name}: {e}")
+        if errors:
+            QMessageBox.warning(self, "Some deletions failed", "\n".join(errors))
+        self.rescan()
+
+
 # ----------------------------------------------------------------------------
 # In-app documentation viewer
 # ----------------------------------------------------------------------------
@@ -1734,11 +1952,13 @@ class MainWindow(QMainWindow):
         self.storage_card = StorageCard()
         self.backup_card = BackupStatusCard()
         self.folders_card = FoldersCard()
+        self.health_card = LabHealthCard()
         self.tools_card = ToolsCard()
 
         outer.addWidget(self.storage_card)
         outer.addWidget(self.backup_card)
         outer.addWidget(self.folders_card)
+        outer.addWidget(self.health_card)
         outer.addWidget(self.tools_card)
         outer.addStretch()
 
@@ -1760,6 +1980,7 @@ class MainWindow(QMainWindow):
         self.backup_card.refresh_status()
         self.backup_card.refresh_schedule()
         self.folders_card.reload_folders()
+        self.health_card.rescan()
         self.tray.update_status()
 
 

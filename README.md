@@ -7,7 +7,7 @@ backup (the rsync job in `_Admin/backup/`).
 
 ## What it does
 
-Single-screen, scrollable dashboard with four cards plus a menu-bar icon.
+Single-screen, scrollable dashboard with five cards plus a menu-bar icon.
 
 ### Storage
 Local Disk, Google Drive, and Dropbox tiles — each with a fill progress bar (turns
@@ -48,6 +48,17 @@ fires at each 5-minute poll tick.
 ### Backed-up Folders
 Add or remove folders from the rsync job (confirmation required before removal), edit
 rsync exclude patterns, and see the total local size of the backup set.
+
+### Lab Health
+A table of every project in `lab/active/`, rescanned on demand: total size, reclaimable
+space (`.venv`, `build`, `dist`, `__pycache__` and the other names in
+`gdrive_backup_excludes.txt` — already git-ignored and backup-excluded, so safe to
+delete), git status (clean / N uncommitted / no repo), and a warning if a project is
+missing `requirements.txt`/`pyproject.toml` or has an `.env` that isn't git-ignored.
+**🧹 Clean up checked** deletes the reclaimable folders for checked rows after a
+confirmation dialog listing exactly what will go and how much space it frees;
+**🔄 Rescan** refreshes the table (also runs on **Refresh all** and at launch).
+Rebuild a cleaned venv with `uv sync` or `pip install -r requirements.txt`.
 
 ### Tools & Links
 Quick launchers and helpers in a grid:
