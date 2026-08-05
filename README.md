@@ -109,6 +109,14 @@ apps from being launched by launchd in non-interactive contexts.
 toggle in the Backup card to register it as a Login Item — this is the recommended setup.
 The app uses no CPU while idle.
 
+**Network-triggered backup:** in addition to the nightly timer, the app also listens for
+network connectivity events via `QNetworkInformation`. When the Mac comes back online
+(e.g. after sleep, a VPN reconnect, or a brief outage), if the last successful backup was
+more than 12 hours ago and the nightly schedule is enabled, the app waits 30 seconds for
+Google Drive to mount and then starts a backup automatically. This means a laptop that
+missed its 03:30 window because it was closed or offline will catch up as soon as it
+reconnects to the internet.
+
 The launchd job (`com.andreas.gdrive-backup`) remains installed as a best-effort
 fallback for the day Apple re-allows launching unsigned apps from agents, but the
 reliable path on macOS 26 is the in-app timer.
