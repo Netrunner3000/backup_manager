@@ -29,6 +29,7 @@ if "--run-backup" in sys.argv:
 
 from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent
 from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap
+from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QListWidget, QTextEdit, QTextBrowser, QFileDialog, QMessageBox, QDialog,
@@ -1392,6 +1393,11 @@ class BackupStatusCard(Card):
         # Also check immediately in case the app was just opened after a missed night.
         QTimer.singleShot(10_000, self._maybe_auto_backup)
 
+        # Network-triggered backup: fire ~30 s after the Mac comes back online.
+        if QNetworkInformation.load(QNetworkInformation.Feature.Reachability):
+            net = QNetworkInformation.instance()
+            net.reachabilityChanged.connect(self._on_reachability_changed)
+
     def _maybe_auto_backup(self):
         """Run the backup automatically if the schedule is on, it's past 03:30,
         and no backup has run since 03:30 today. Also notifies if >25 h overdue."""
@@ -1431,6 +1437,21 @@ class BackupStatusCard(Card):
                 if h > 3 or (h == 3 and mi >= 30):
                     return  # already ran today after 03:30
         self.run_backup()
+
+    def _on_reachability_changed(self, reachability):
+        if reachability == QNetworkInformation.Reachability.Online:
+            # Wait 30 s for Google Drive to mount before attempting backup.
+            QTimer.singleShot(30_000, self._backup_on_network_up)
+
+    def _backup_on_network_up(self):
+        """Run backup when Mac comes online if no successful backup in the past 12 h."""
+        if self.proc is not None:
+            return
+        if not launchd_loaded():
+            return
+        age = last_backup_age_hours()
+        if age is None or age > 12:
+            self.run_backup()
 
     def refresh_status(self):
         info, _ = last_backup_info()
