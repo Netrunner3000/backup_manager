@@ -1326,6 +1326,7 @@ class BackupStatusCard(Card):
         super().__init__("Google Drive Backup", "Status, schedule, and manual run")
         self.proc = None
         self._dry_run = False
+        self._last_overdue_notify: datetime | None = None
 
         info, _ = last_backup_info()
         self.status_lbl = QLabel(info)
@@ -1380,6 +1381,7 @@ class BackupStatusCard(Card):
         self.log.setReadOnly(True)
         self.log.setFixedHeight(140)
         self.body(self.log)
+        self._preload_log()
 
         self.refresh_schedule()
         self.refresh_wake()
@@ -1407,10 +1409,8 @@ class BackupStatusCard(Card):
             # Even if schedule is off, warn if backup is very overdue.
             age = last_backup_age_hours()
             if age is not None and age > 25:
-                _notify(
-                    "Backup Control Center",
-                    f"Last backup was {int(age)}h ago — schedule is disabled.",
-                    "Backup overdue",
+                self._notify_overdue(
+                    f"Last backup was {int(age)}h ago — schedule is disabled."
                 )
             return
 
@@ -1419,11 +1419,7 @@ class BackupStatusCard(Card):
             # Before the backup window: warn if it's been >25 h since last successful run.
             age = last_backup_age_hours()
             if age is not None and age > 25:
-                _notify(
-                    "Backup Control Center",
-                    f"Last successful backup was {int(age)}h ago.",
-                    "Backup overdue",
-                )
+                self._notify_overdue(f"Last successful backup was {int(age)}h ago.")
             return
 
         # Past 03:30 — check if a backup log exists for today with a timestamp >= 03:30.
@@ -1437,6 +1433,27 @@ class BackupStatusCard(Card):
                 if h > 3 or (h == 3 and mi >= 30):
                     return  # already ran today after 03:30
         self.run_backup()
+
+    def _notify_overdue(self, message: str) -> None:
+        """Send an overdue-backup notification at most once per hour."""
+        now = datetime.now()
+        if self._last_overdue_notify and (now - self._last_overdue_notify).total_seconds() < 3600:
+            return
+        self._last_overdue_notify = now
+        _notify("Backup Control Center", message, "Backup overdue")
+
+    def _preload_log(self) -> None:
+        """Show the tail of the most recent backup log at startup."""
+        logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")))
+        if not logs:
+            return
+        try:
+            text = Path(logs[-1]).read_text(errors="replace")
+        except OSError:
+            return
+        tail = "\n".join(text.splitlines()[-60:])
+        self.log.setPlainText(tail)
+        self.log.moveCursor(QTextCursor.End)
 
     def _on_reachability_changed(self, reachability):
         if reachability == QNetworkInformation.Reachability.Online:
