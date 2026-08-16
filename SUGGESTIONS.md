@@ -1,53 +1,61 @@
 # Backup Control Center — Suggestions & Roadmap
 
-Grouped by effort. Items marked ✅ are already implemented.
+✅ = already implemented. Open items are grouped by effort.
 
 ---
 
-## Quick wins (< 1 session each)
+## Open backlog (formal todo)
 
-| # | Feature | Detail |
-|---|---|---|
-| 1 ✅ | **Dark mode live reload** | `paletteChanged` listener re-themes live. Manual ☀/🌙 toggle in header. |
-| 2 | **Keyboard shortcut to run backup** | `Ctrl+R` triggers Run backup now. *(skipped — not needed)* |
-| 3 ✅ | **Network trigger status in UI** | "🌐 Network trigger: active/unavailable" label in Backup card. |
-| 4 ✅ | **Persist notification cooldown** | `last_overdue_notify` written to `state.json`; survives restarts. |
-| 5 ✅ | **Right-click Lab Health → Finder / Terminal** | Context menu on every row. |
+| Item | Notes |
+|---|---|
+| **Developer ID code signing** | Requires a paid Apple Developer account ($99/yr). Eliminates FDA re-grant after every rebuild and lets launchd launch the app as a reliable fallback. Cannot be done in code alone. |
 
 ---
 
-## Medium (1 session each)
+## New suggestions — quick wins
 
-| # | Feature | Detail |
+| # | Feature | Why |
 |---|---|---|
-| 6 ✅ | **Storage tiles refresh on reconnect** | `QNetworkInformation.reachabilityChanged → Online` triggers `StorageCard.refresh()`. |
-| 7 ✅ | **Backup destination health check** | `run_backup()` aborts with a warning if Google Drive mount is missing. |
-| 8 ✅ | **Hide to menu bar on close** | Settings dialog (⚙ in header) has "Hide to menu bar on close" toggle; stored in `state.json`. |
-| 9 ✅ | **Backup size in History** | Parses rsync `--stats` "Total transferred file size" → Transferred column. |
-| 10 ✅ | **Live dark/light toggle** | ☀/🌙 button in header; also auto-updates on system appearance change. |
+| A | **Backup pause / resume** | Add a ⏸ Pause button that sends SIGSTOP to the rsync process and a ▶ Resume that sends SIGCONT. Useful when bandwidth is needed for something else mid-backup. |
+| B | **Keyboard shortcut Cmd+R to run backup** | Single line: `QShortcut(QKeySequence("Ctrl+R"), self, self.run_backup)`. Standard for "refresh/run" on macOS. |
+| C | **Tray icon badge on overdue** | Change the tray icon to a warning variant (e.g. orange dot overlay) when the backup is overdue, so it's visible at a glance without opening the app. |
+| D | **Restore last log scroll position** | Save the scroll position in `state.json` so the log widget re-opens where you left off instead of always at the bottom. |
+| E | **Confirm before Quit from tray** | When hide-on-close is enabled, Quit from the tray icon exits silently. Add a one-line confirmation dialog so it's harder to accidentally kill overnight backups. |
 
 ---
 
-## Bigger (multi-session)
+## New suggestions — medium
 
-| # | Feature | Detail |
+| # | Feature | Why |
 |---|---|---|
-| 11 | **Developer ID code signing** | Requires paid Apple Developer account ($99/yr) — cannot be implemented in code alone. Eliminates FDA re-grant after each rebuild. |
-| 12 | **In-app Google Drive OAuth flow** | The OAuth browser→localhost flow is already implemented in `cloud_quota.py`. What remains manual is registering your own Google OAuth app (required by Google — can't be bypassed). |
-| 13 | **Dropbox in-app OAuth flow** | Same as above — flow exists, Dropbox app registration is a one-time manual step per-user. |
-| 14 ✅ | **iCloud local cache tile** | `ICloudTile` shows local iCloud size via `du`. No cloud quota API exists. |
-| 15 ✅ | **Time Machine status card** | `TimeMachineCard` shows last backup, idle/running, and Back up now button. |
-| 16 ✅ | **Log viewer in History** | 📄 View log button opens the raw rsync log for any selected run. rsync now runs with `--stats --itemize-changes` so logs include per-file changes and transfer totals. |
+| F | **Backup verification spot-check** | After each successful backup, pick 3–5 random files, compute their checksums locally and in Google Drive (via Drive API), and note any mismatch in the log. Catches silent rsync failures. |
+| G | **Storage quota trend chart** | Log used/total quota each refresh to a small SQLite or JSON file; draw a 30-day sparkline in the tile so you can see if you're growing toward a limit. |
+| H | **Restore helper** | A "Restore from Drive" button in the Backup card that rsync's a selected folder back from Google Drive to a local staging directory. Uses the same script infrastructure in reverse. |
+| I | **Per-folder backup status** | In the Backed-up Folders card, show the last sync timestamp per folder by scanning the log for per-folder "OK: <folder>" lines. Makes it obvious if one folder is always failing. |
+| J | **Exclude patterns preview** | In the Excludes dialog, add a "Preview matches" button that runs `find ~/Documents/<folder> -name <pattern>` for each pattern and shows what would be skipped, so you can verify your excludes before the next run. |
+| K | **Backup on USB drive mount** | `QFileSystemWatcher` can watch for new mount points. Trigger a backup when a USB drive appears — useful as a secondary local backup destination. |
 
 ---
 
-## macOS integration (requires more research)
+## New suggestions — bigger
+
+| # | Feature | Why |
+|---|---|---|
+| L | **S3 / Backblaze B2 as second destination** | Add an optional second rsync target (S3-compatible via `rclone`) so there's an offsite copy that isn't Google Drive. The backup script already supports pluggable destinations. |
+| M | **Email / webhook on backup failure** | When a backup finishes WITH ERRORS, POST to a configurable webhook URL (Slack, ntfy, Pushover) or send an email via SMTP. Macbook may be offline when you check it. |
+| N | **Backup schedule editor** | Currently hardcoded to 03:30. A time-picker in Settings lets you choose any hour. Stores in `state.json`; the polling timer reads it each tick. |
+| O | **Quick-backup a single folder** | Right-click any row in Backed-up Folders → "Back up now" runs rsync for just that folder. Useful after a big edit to one project without waiting for the full nightly run. |
+| P | **Lab Hub integration — launch from hub** | Register `Backup Control Center` in Lab Hub's launcher list so it appears alongside Sentinel AI, SONAR, etc. Currently only openable from Spotlight or Login Item. |
+
+---
+
+## macOS integration (research needed)
 
 | # | Feature | Detail |
 |---|---|---|
-| 17 | **Power Nap backup** | Apple's Power Nap allows certain background tasks while sleeping (iCloud, App Store). Third-party apps cannot opt in directly, but a helper daemon registered via SMAppService might qualify. Needs investigation. |
-| 18 | **Shortcuts app integration** | Export a macOS Shortcut that triggers `Backup Control Center --run-backup` so the user can add a backup step to any Shortcuts automation (Focus modes, calendar events, etc.). |
-| 19 | **Focus mode awareness** | Suppress notifications during Do Not Disturb / Focus modes using `NSUserNotificationCenter` focus filter API, rather than always sending them. |
+| 17 | **Power Nap backup** | Apple's Power Nap wakes certain background tasks during sleep (iCloud, App Store). A helper daemon registered via `SMAppService` might qualify — needs investigation. |
+| 18 | **Shortcuts app integration** | Export a macOS Shortcut that triggers `Backup Control Center --run-backup` so the backup can be added to any Shortcuts automation (Focus modes, calendar events, etc.). |
+| 19 | **Focus mode notification filter** | Suppress overdue-backup notifications during Do Not Disturb / Focus using the `NSUserNotificationCenter` focus filter API. |
 
 ---
 
@@ -57,7 +65,7 @@ Grouped by effort. Items marked ✅ are already implemented.
 |---|---|
 | Storage tiles (Local, Google Drive, Dropbox) with progress bars | v1 |
 | 5-min auto-refresh of storage tiles | v1 |
-| Cloud accounts OAuth quota dialog | v1 |
+| Cloud accounts OAuth quota dialog (Google + Dropbox) | v1 |
 | Nightly backup timer (in-app, replaces launchd) | v1 |
 | Wake Mac at 03:25 (pmset) toggle | v1 |
 | Open at login (Login Item) toggle | v1 |
@@ -68,12 +76,12 @@ Grouped by effort. Items marked ✅ are already implemented.
 | macOS notification on backup finish | Aug 2026 |
 | Overdue-backup notification (>25 h, max once/hr) | Aug 2026 |
 | Network-triggered backup on reconnect | Aug 2026 |
-| Menu-bar icon (QSystemTrayIcon) | Aug 2026 |
+| Menu-bar icon (QSystemTrayIcon) with tray menu | Aug 2026 |
 | Dark mode (iOS HIG palette, detected at launch) | Aug 2026 |
-| Confirmation dialog before removing folder | Aug 2026 |
+| Confirmation dialog before removing a backed-up folder | Aug 2026 |
 | Google Photos Takeout guide in Tools | Aug 2026 |
 | Proton vault mount check in Tools | Aug 2026 |
-| Lab Health card (project sizes, git status, cleanup) | Aug 2026 |
+| Lab Health card (sizes, git status, cleanup) | Aug 2026 |
 | Single-instance guard | Aug 2026 |
 | Launches maximized | Aug 2026 |
 | Dark mode live reload + ☀/🌙 manual toggle | Aug 2026 |
@@ -82,8 +90,8 @@ Grouped by effort. Items marked ✅ are already implemented.
 | Right-click Lab Health → Open in Finder / Terminal | Aug 2026 |
 | StorageCard refreshes on network reconnect | Aug 2026 |
 | Backup destination health check before run | Aug 2026 |
-| Settings dialog with hide-to-menu-bar-on-close toggle | Aug 2026 |
+| Settings dialog with hide-to-menu-bar-on-close | Aug 2026 |
 | Backup History: Transferred column + per-row log viewer | Aug 2026 |
 | rsync --stats + --itemize-changes in all backup runs | Aug 2026 |
-| iCloud local cache tile (ICloudTile, du-based) | Aug 2026 |
+| iCloud local cache tile (du-based, no cloud API) | Aug 2026 |
 | Time Machine status card | Aug 2026 |
