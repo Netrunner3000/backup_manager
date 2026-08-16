@@ -1,19 +1,20 @@
 # Backup Control Center
 
-
 ![Screenshot](docs/screenshot.png)
 A PySide6 desktop app to monitor cloud storage and manage the custom Google Drive
 backup (the rsync job in `_Admin/backup/`).
 
 ## What it does
 
-Single-screen, scrollable dashboard with five cards plus a menu-bar icon.
+Single-screen, scrollable dashboard with five cards plus a menu-bar icon. Launches
+maximized so the full dashboard is visible without resizing.
 
 ### Storage
 Local Disk, Google Drive, and Dropbox tiles — each with a fill progress bar (turns
 amber at 70 %, red at 90 %) and real account quota once connected via OAuth. Unmounted
 drives are hidden automatically. Duplicate CloudStorage folders for the same account are
-deduplicated. Storage tiles auto-refresh every 5 minutes.
+deduplicated. Storage tiles auto-refresh every 5 minutes and also refresh immediately
+when the Mac reconnects to the network.
 
 - **☁ Cloud accounts…** — paste a one-time OAuth Client ID/Secret (Google) or App
   Key/Secret (Dropbox), then Connect each mount to show its real used/total quota.
@@ -24,7 +25,9 @@ deduplicated. Storage tiles auto-refresh every 5 minutes.
   a public quota API (see "What it deliberately does NOT do").
 
 ### Google Drive Backup
-Last run timestamp and status (OK / WITH ERRORS), live log output, and:
+Last run timestamp and status (OK / WITH ERRORS), live log output pre-populated with
+the last 60 lines of the most recent backup log so status is visible immediately at
+launch. Controls:
 
 | Control | Effect |
 |---|---|
@@ -33,17 +36,17 @@ Last run timestamp and status (OK / WITH ERRORS), live log output, and:
 | **📋 History** | Table of the last 15 backup runs: date, start time, duration, colour-coded status |
 | **■ Stop** | Kills the running backup or dry run |
 
-Three toggles below the buttons:
+Three toggles:
 
 | Toggle | Effect |
 |---|---|
 | **🕒 Nightly schedule (03:30)** | Enables the in-app auto-backup timer (see "How the nightly backup works") |
-| **⏰ Wake Mac at 03:25** | Sets a `pmset` wake schedule so the Mac powers on before 03:30 |
-| **🚀 Open at login** | Adds or removes the app as a macOS Login Item — the recommended way to keep it running overnight |
+| **⏰ Wake Mac at 03:25** | Sets a `pmset` wake schedule so the Mac powers on before 03:30 — **required for overnight backups when the Mac sleeps** |
+| **🚀 Open at login** | Adds or removes the app as a macOS Login Item — the recommended way to keep it running |
 
-**Notifications:** a macOS notification fires when a real backup finishes (success or
-errors). If the last successful backup is more than 25 hours ago, a warning notification
-fires at each 5-minute poll tick.
+**Notifications:**
+- A macOS notification fires when a real backup finishes (success or errors).
+- If the last successful backup is more than 25 hours ago, an overdue warning fires — at most once per hour so a long sleep doesn't flood Notification Centre.
 
 ### Backed-up Folders
 Add or remove folders from the rsync job (confirmation required before removal), edit
@@ -89,6 +92,9 @@ Automatically matches the system light/dark appearance at launch.
   publish no public API for storage quota. This is a permanent provider limitation, not a
   missing setup step. (Google Drive and Dropbox both publish official REST quota APIs,
   which is what **Cloud accounts…** uses.)
+- **Sleep mode does not pause and resume backups.** When the Mac is asleep, all processes
+  are suspended — no timer or background app can run a backup. Enable **⏰ Wake Mac at
+  03:25** so the Mac wakes itself before the backup window.
 
 ---
 
@@ -98,24 +104,24 @@ The backup is triggered by an in-app timer, **not** by launchd launching the app
 is required because macOS 26 (Tahoe) removed `spctl --add` and Gatekeeper blocks unsigned
 apps from being launched by launchd in non-interactive contexts.
 
-**Flow:**
+**Recommended setup (three steps):**
+1. Enable **🕒 Nightly schedule (03:30)** in the Backup card.
+2. Enable **⏰ Wake Mac at 03:25** so the Mac wakes itself up before the backup window.
+3. Enable **🚀 Open at login** so the app is always running when the Mac wakes.
+
+**Timer flow:**
 1. App runs a 5-minute polling timer.
 2. On each tick (and 10 s after launch): if the nightly schedule is enabled, it is past
    03:30, and no backup has started today at or after 03:30 — the backup fires.
 3. The backup runs under the app's Full Disk Access grant; rsync reads all folders
    without extra setup.
 
-**The app must be running for the auto-backup to fire.** Use the **🚀 Open at login**
-toggle in the Backup card to register it as a Login Item — this is the recommended setup.
-The app uses no CPU while idle.
-
-**Network-triggered backup:** in addition to the nightly timer, the app also listens for
-network connectivity events via `QNetworkInformation`. When the Mac comes back online
-(e.g. after sleep, a VPN reconnect, or a brief outage), if the last successful backup was
+**Network-triggered backup:** in addition to the nightly timer, the app listens for
+network connectivity events (`QNetworkInformation`). When the Mac comes back online
+(e.g. after sleep, VPN reconnect, or a brief outage), if the last successful backup was
 more than 12 hours ago and the nightly schedule is enabled, the app waits 30 seconds for
-Google Drive to mount and then starts a backup automatically. This means a laptop that
-missed its 03:30 window because it was closed or offline will catch up as soon as it
-reconnects to the internet.
+Google Drive to mount and then starts a backup automatically. A laptop that missed the
+03:30 window will catch up as soon as it reconnects to the internet.
 
 The launchd job (`com.andreas.gdrive-backup`) remains installed as a best-effort
 fallback for the day Apple re-allows launching unsigned apps from agents, but the
@@ -147,8 +153,7 @@ Grant it once:
 > select `/Applications/Backup Control Center.app`
 
 **After each rebuild** the ad-hoc code signature changes, so FDA must be re-granted:
-remove the old entry and add the freshly built app. The app will warn you if it cannot
-reach the backup destination.
+remove the old entry and add the freshly built app.
 
 ---
 
@@ -183,5 +188,9 @@ Re-run after any change to `main.py` or `cloud_quota.py`, then re-grant Full Dis
 ---
 
 ## Backlog
-- Proper Developer ID code signing — removes the need to re-grant FDA after each rebuild
-  and would allow launchd to launch the app directly as a reliable fallback.
+- **Developer ID code signing** — removes the need to re-grant FDA after each rebuild
+  and would allow launchd to launch the app directly as a reliable fallback. Requires a
+  paid Apple Developer account ($99/yr).
+
+## Suggestions
+See [SUGGESTIONS.md](SUGGESTIONS.md) for the full feature and improvement roadmap.
