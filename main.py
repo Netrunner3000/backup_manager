@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QTextEdit, QTextBrowser, QFileDialog, QMessageBox, QDialog,
     QPlainTextEdit, QListWidgetItem, QFrame, QScrollArea, QProgressBar,
     QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QFormLayout, QComboBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon, QMenu,
+    QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon, QMenu, QCheckBox,
 )
 
 import cloud_quota
@@ -528,6 +528,17 @@ def cloud_services():
     return rows
 
 
+def icloud_local_bytes() -> int | None:
+    """Bytes used by the local iCloud cache, or None if unavailable."""
+    rc, out, _ = run_cmd(["du", "-sk", str(HOME / "Library" / "Mobile Documents")], timeout=30)
+    if rc == 0 and out:
+        try:
+            return int(out.split("\t", 1)[0]) * 1024
+        except ValueError:
+            pass
+    return None
+
+
 def storage_targets():
     """(name, path, exists) for Local Disk plus mounts that can show real account
     quota (Google Drive, Dropbox). Proton Drive / iCloud Drive have no public quota
@@ -635,6 +646,26 @@ def set_login_item(enable: bool) -> tuple:
         script = 'tell application "System Events" to delete login item "Backup Control Center"'
     rc, _, err = run_cmd(["osascript", "-e", script], timeout=10)
     return rc == 0, err
+
+
+# ----------------------------------------------------------------------------
+# App state persistence (notification cooldown, preferences)
+# ----------------------------------------------------------------------------
+_STATE_FILE = cloud_quota.SECRETS_DIR / "state.json"
+
+
+def _load_state() -> dict:
+    if _STATE_FILE.exists():
+        try:
+            return json.loads(_STATE_FILE.read_text())
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def _save_state(data: dict) -> None:
+    cloud_quota.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    _STATE_FILE.write_text(json.dumps(data, indent=2))
 
 
 # ----------------------------------------------------------------------------
@@ -911,6 +942,85 @@ class StorageTile(QFrame):
         )
 
 
+class ICloudTile(QFrame):
+    """Storage tile that shows local iCloud cache size via du (no cloud API)."""
+
+    class _Worker(QThread):
+        done = Signal(object)  # int bytes or None
+        def run(self):
+            self.done.emit(icloud_local_bytes())
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedWidth(TILE_WIDTH)
+        self.setObjectName("StorageTile")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        top = QHBoxLayout()
+        name_lbl = QLabel("iCloud Drive")
+        name_lbl.setObjectName("TileName")
+        top.addWidget(name_lbl)
+        top.addStretch()
+        dot = QLabel("●" if ICLOUD_DIR.exists() else "○")
+        dot.setStyleSheet("color: #16a34a;" if ICLOUD_DIR.exists() else "color: #d1d5db;")
+        top.addWidget(dot)
+        layout.addLayout(top)
+
+        acct_lbl = QLabel("Local cache only")
+        acct_lbl.setObjectName("TileAccount")
+        layout.addWidget(acct_lbl)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setValue(0)
+        layout.addWidget(self.bar)
+
+        self.detail_lbl = QLabel("Calculating…")
+        self.detail_lbl.setObjectName("TileFree")
+        layout.addWidget(self.detail_lbl)
+
+        note = QLabel("No cloud quota API")
+        note.setObjectName("TileAccount")
+        layout.addWidget(note)
+
+        open_btn = link_button("Open in Finder →")
+        open_btn.setStyleSheet(open_btn.styleSheet() + "font-size: 10px; padding: 2px 0;")
+        open_btn.clicked.connect(lambda: run_cmd(["open", str(ICLOUD_DIR)]))
+        layout.addWidget(open_btn)
+
+        self._worker = self._Worker()
+        self._worker.done.connect(self._on_done)
+        self._worker.start()
+
+    def _on_done(self, size: int | None):
+        bar_bg = "#48484A" if _DARK else "#E5E5EA"
+        if size is None:
+            self.detail_lbl.setText("Unavailable")
+            self.bar.setStyleSheet(
+                f"QProgressBar {{ border:none; border-radius:4px; background:{bar_bg}; height:6px; }}"
+                f"QProgressBar::chunk {{ border-radius:4px; background:{bar_bg}; }}"
+            )
+            return
+        self.detail_lbl.setText(f"{human_size(size)} local cache")
+        # Show bar relative to local disk total so it's meaningful
+        usage = disk_usage_for(ICLOUD_DIR)
+        if usage and usage.total > 0:
+            pct = int(size * 100 / usage.total)
+            color = ("#FF453A" if _DARK else "#FF3B30") if pct >= 90 else \
+                    ("#FF9F0A" if _DARK else "#FF9500") if pct >= 70 else \
+                    ("#0A84FF" if _DARK else "#007AFF")
+            self.bar.setValue(pct)
+            self.bar.setStyleSheet(
+                f"QProgressBar {{ border:none; border-radius:4px; background:{bar_bg}; height:6px; }}"
+                f"QProgressBar::chunk {{ border-radius:4px; background:{color}; }}"
+            )
+        else:
+            self.bar.setValue(0)
+
+
 class StorageCard(Card):
     def __init__(self):
         super().__init__()
@@ -944,6 +1054,14 @@ class StorageCard(Card):
         self._refresh_timer.timeout.connect(self.refresh)
         self._refresh_timer.start()
 
+        # Also refresh when network comes back up (catches VPN / wake from sleep).
+        if QNetworkInformation.load(QNetworkInformation.Feature.Reachability):
+            QNetworkInformation.instance().reachabilityChanged.connect(self._on_net_up)
+
+    def _on_net_up(self, reachability):
+        if reachability == QNetworkInformation.Reachability.Online:
+            self.refresh()
+
     def refresh(self):
         for t in self.tiles:
             t.setParent(None)
@@ -968,6 +1086,10 @@ class StorageCard(Card):
             )
             self.tiles_row.addWidget(tile)
             self.tiles.append(tile)
+        # iCloud local cache size (no public API — shows local disk usage only)
+        icloud_tile = ICloudTile()
+        self.tiles_row.addWidget(icloud_tile)
+        self.tiles.append(icloud_tile)
         self.tiles_row.addStretch()
 
     def open_accounts_dialog(self):
@@ -1255,42 +1377,73 @@ class BackupHistoryDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Backup History")
-        self.resize(600, 360)
+        self.resize(720, 380)
         layout = QVBoxLayout(self)
 
-        table = QTableWidget()
-        table.setColumnCount(4)
-        table.setHorizontalHeaderLabels(["Date", "Started", "Duration", "Status"])
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.verticalHeader().setVisible(False)
-        table.setAlternatingRowColors(True)
+        self._table = QTableWidget()
+        self._table.setColumnCount(5)
+        self._table.setHorizontalHeaderLabels(["Date", "Started", "Duration", "Transferred", "Status"])
+        hdr = self._table.horizontalHeader()
+        for c in range(4):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.Stretch)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setAlternatingRowColors(True)
 
-        runs = self._parse_runs()
-        table.setRowCount(len(runs))
-        for r, (date, started, duration, status) in enumerate(runs):
-            for c, val in enumerate([date, started, duration, status]):
+        self._runs = self._parse_runs()
+        self._table.setRowCount(len(self._runs))
+        for r, (date, started, duration, transferred, status, _log_path) in enumerate(self._runs):
+            for c, val in enumerate([date, started, duration, transferred, status]):
                 item = QTableWidgetItem(val)
-                if c == 3:
+                if c == 4:
                     item.setForeground(
                         QColor("#16a34a") if val == "OK"
                         else QColor("#dc2626") if val == "ERRORS"
                         else QColor("#9ca3af")
                     )
-                table.setItem(r, c, item)
+                self._table.setItem(r, c, item)
 
-        layout.addWidget(table)
+        layout.addWidget(self._table)
 
         row = QHBoxLayout()
+        self._view_btn = secondary_button("📄 View log")
+        self._view_btn.clicked.connect(self._view_log)
+        row.addWidget(self._view_btn)
         row.addStretch()
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
         row.addWidget(close_btn)
         layout.addLayout(row)
+
+    def _view_log(self):
+        rows = self._table.selectedItems()
+        if not rows:
+            return
+        r = self._table.currentRow()
+        if r < 0 or r >= len(self._runs):
+            return
+        log_path = self._runs[r][5]
+        if not log_path or not Path(log_path).exists():
+            QMessageBox.information(self, "Log not found", f"Log file not found:\n{log_path}")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Log — {Path(log_path).name}")
+        dlg.resize(800, 600)
+        v = QVBoxLayout(dlg)
+        viewer = QPlainTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setPlainText(Path(log_path).read_text(errors="replace"))
+        viewer.moveCursor(QTextCursor.End)
+        v.addWidget(viewer)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        ok = QPushButton("Close")
+        ok.clicked.connect(dlg.accept)
+        btn_row.addWidget(ok)
+        v.addLayout(btn_row)
+        dlg.exec()
 
     def _parse_runs(self):
         logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True)[:15]
@@ -1313,8 +1466,15 @@ class BackupHistoryDialog(QDialog):
                     duration = f"{secs // 60}m {secs % 60}s"
                 except ValueError:
                     pass
+            size_m = re.search(r"Total transferred file size:\s*([\d,]+)\s*bytes", text)
+            transferred = "—"
+            if size_m:
+                try:
+                    transferred = human_size(int(size_m.group(1).replace(",", "")))
+                except ValueError:
+                    pass
             status = "OK" if "finished OK" in text else "ERRORS" if "WITH ERRORS" in text else "—"
-            runs.append((date, started, duration, status))
+            runs.append((date, started, duration, transferred, status, log_path))
         return runs
 
 
@@ -1326,7 +1486,11 @@ class BackupStatusCard(Card):
         super().__init__("Google Drive Backup", "Status, schedule, and manual run")
         self.proc = None
         self._dry_run = False
-        self._last_overdue_notify: datetime | None = None
+        state = _load_state()
+        ts = state.get("last_overdue_notify")
+        self._last_overdue_notify: datetime | None = (
+            datetime.fromisoformat(ts) if ts else None
+        )
 
         info, _ = last_backup_info()
         self.status_lbl = QLabel(info)
@@ -1396,9 +1560,13 @@ class BackupStatusCard(Card):
         QTimer.singleShot(10_000, self._maybe_auto_backup)
 
         # Network-triggered backup: fire ~30 s after the Mac comes back online.
-        if QNetworkInformation.load(QNetworkInformation.Feature.Reachability):
+        _net_ok = QNetworkInformation.load(QNetworkInformation.Feature.Reachability)
+        if _net_ok:
             net = QNetworkInformation.instance()
             net.reachabilityChanged.connect(self._on_reachability_changed)
+        net_lbl = QLabel("🌐 Network trigger: " + ("active" if _net_ok else "unavailable"))
+        net_lbl.setObjectName("CardSubtitle")
+        self.body(net_lbl)
 
     def _maybe_auto_backup(self):
         """Run the backup automatically if the schedule is on, it's past 03:30,
@@ -1435,11 +1603,14 @@ class BackupStatusCard(Card):
         self.run_backup()
 
     def _notify_overdue(self, message: str) -> None:
-        """Send an overdue-backup notification at most once per hour."""
+        """Send an overdue-backup notification at most once per hour, persisted across restarts."""
         now = datetime.now()
         if self._last_overdue_notify and (now - self._last_overdue_notify).total_seconds() < 3600:
             return
         self._last_overdue_notify = now
+        state = _load_state()
+        state["last_overdue_notify"] = now.isoformat()
+        _save_state(state)
         _notify("Backup Control Center", message, "Backup overdue")
 
     def _preload_log(self) -> None:
@@ -1522,6 +1693,9 @@ class BackupStatusCard(Card):
 
     def run_backup(self):
         if self.proc is not None:
+            return
+        if not DEST_ROOT.exists():
+            self.status_lbl.setText("⚠ Google Drive not mounted — cannot run backup.")
             return
         self._dry_run = False
         self.log.clear()
@@ -1679,6 +1853,8 @@ class LabHealthCard(Card):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setMinimumHeight(280)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         self.body(self.table)
 
         row = QHBoxLayout()
@@ -1752,6 +1928,20 @@ class LabHealthCard(Card):
             f"{len(rows)} projects"
         )
 
+    def _context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row < 0 or row >= len(self._rows):
+            return
+        project_path = LAB_ACTIVE / self._rows[row]["name"]
+        menu = QMenu(self)
+        open_action = menu.addAction("📂 Open in Finder")
+        term_action = menu.addAction("🖥 Open in Terminal")
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action == open_action:
+            subprocess.run(["open", str(project_path)])
+        elif action == term_action:
+            subprocess.run(["open", "-a", "Terminal", str(project_path)])
+
     def clean_checked(self):
         targets = []  # (project_name, path, kb)
         for r, row in enumerate(self._rows):
@@ -1791,6 +1981,61 @@ class LabHealthCard(Card):
         if errors:
             QMessageBox.warning(self, "Some deletions failed", "\n".join(errors))
         self.rescan()
+
+
+# ----------------------------------------------------------------------------
+# Time Machine card
+# ----------------------------------------------------------------------------
+class TimeMachineCard(Card):
+    def __init__(self):
+        super().__init__("Time Machine", "Local snapshot backup status")
+
+        self.last_lbl = QLabel("Checking…")
+        self.body(self.last_lbl)
+
+        self.status_lbl = QLabel("")
+        self.body(self.status_lbl)
+
+        row = QHBoxLayout()
+        self.backup_btn = QPushButton("⏱ Back up now")
+        self.backup_btn.clicked.connect(self._start_backup)
+        refresh_btn = secondary_button("🔄 Refresh")
+        refresh_btn.clicked.connect(self.refresh)
+        row.addWidget(self.backup_btn)
+        row.addWidget(refresh_btn)
+        row.addStretch()
+        self.body(row)
+
+        self.refresh()
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(5 * 60 * 1000)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
+
+    def refresh(self):
+        # Last backup
+        rc, out, _ = run_cmd(["tmutil", "latestbackup"], timeout=10)
+        if rc == 0 and out.strip():
+            p = Path(out.strip())
+            self.last_lbl.setText(f"Last backup: {p.name}")
+        else:
+            self.last_lbl.setText("Last backup: none found")
+
+        # Current status
+        rc2, out2, _ = run_cmd(["tmutil", "status"], timeout=10)
+        running = "Running" in out2 or "Backing Up" in out2
+        self.status_lbl.setText("Status: backing up now…" if running else "Status: idle")
+        self.backup_btn.setEnabled(not running)
+
+    def _start_backup(self):
+        rc, _, err = run_cmd(["tmutil", "startbackup"], timeout=10)
+        if rc != 0 and err:
+            QMessageBox.warning(self, "Time Machine", f"Could not start backup:\n{err}")
+        else:
+            self.status_lbl.setText("Status: backup requested…")
+            self.backup_btn.setEnabled(False)
+            QTimer.singleShot(5000, self.refresh)
 
 
 # ----------------------------------------------------------------------------
@@ -1985,18 +2230,28 @@ class MainWindow(QMainWindow):
         refresh_btn = secondary_button("🔄 Refresh all")
         refresh_btn.clicked.connect(self.refresh_all)
         header.addWidget(refresh_btn)
+        self._theme_btn = secondary_button("☀" if _DARK else "🌙")
+        self._theme_btn.setFixedWidth(36)
+        self._theme_btn.clicked.connect(self._toggle_theme)
+        header.addWidget(self._theme_btn)
+        settings_btn = secondary_button("⚙")
+        settings_btn.setFixedWidth(36)
+        settings_btn.clicked.connect(lambda: SettingsDialog(self).exec())
+        header.addWidget(settings_btn)
         outer.addLayout(header)
 
         self.storage_card = StorageCard()
         self.backup_card = BackupStatusCard()
         self.folders_card = FoldersCard()
         self.health_card = LabHealthCard()
+        self.tm_card = TimeMachineCard()
         self.tools_card = ToolsCard()
 
         outer.addWidget(self.storage_card)
         outer.addWidget(self.backup_card)
         outer.addWidget(self.folders_card)
         outer.addWidget(self.health_card)
+        outer.addWidget(self.tm_card)
         outer.addWidget(self.tools_card)
         outer.addStretch()
 
@@ -2013,12 +2268,45 @@ class MainWindow(QMainWindow):
 
         self.backup_card._finished = _patched_finished
 
+        # Live dark mode: re-theme when system appearance changes.
+        QApplication.instance().paletteChanged.connect(self._on_palette_changed)
+
+    def _toggle_theme(self):
+        global _DARK
+        _DARK = not _DARK
+        QApplication.instance().setStyleSheet(build_app_style(_DARK))
+        self._theme_btn.setText("☀" if _DARK else "🌙")
+        self.storage_card.refresh()
+
+    def _on_palette_changed(self, _palette=None):
+        new_dark = _system_dark_mode()
+        global _DARK
+        if new_dark != _DARK:
+            _DARK = new_dark
+            QApplication.instance().setStyleSheet(build_app_style(_DARK))
+            self._theme_btn.setText("☀" if _DARK else "🌙")
+            self.storage_card.refresh()
+
+    def closeEvent(self, event):
+        if _load_state().get("hide_on_close", False):
+            event.ignore()
+            self.hide()
+            self.tray.showMessage(
+                "Backup Control Center",
+                "Running in the menu bar. Click the icon to restore.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+        else:
+            event.accept()
+
     def refresh_all(self):
         self.storage_card.refresh()
         self.backup_card.refresh_status()
         self.backup_card.refresh_schedule()
         self.folders_card.reload_folders()
         self.health_card.rescan()
+        self.tm_card.refresh()
         self.tray.update_status()
 
 
@@ -2066,6 +2354,7 @@ class BackupTrayIcon(QSystemTrayIcon):
 
     def _show_window(self):
         self._window.show()
+        self._window.showMaximized()
         self._window.raise_()
         self._window.activateWindow()
 
@@ -2073,6 +2362,50 @@ class BackupTrayIcon(QSystemTrayIcon):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                       QSystemTrayIcon.ActivationReason.DoubleClick):
             self._show_window()
+
+
+# ----------------------------------------------------------------------------
+# Settings dialog
+# ----------------------------------------------------------------------------
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+
+        state = _load_state()
+
+        self._hide_chk = QCheckBox("Hide to menu bar on close (don't quit)")
+        self._hide_chk.setChecked(state.get("hide_on_close", False))
+        layout.addWidget(self._hide_chk)
+
+        note = QLabel(
+            "When enabled, closing the window keeps the app running in the menu bar. "
+            "Use Quit from the menu-bar icon to fully exit."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("CardSubtitle")
+        layout.addWidget(note)
+
+        layout.addStretch()
+
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel_btn = secondary_button("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(self._save)
+        row.addWidget(cancel_btn)
+        row.addWidget(save_btn)
+        layout.addLayout(row)
+
+    def _save(self):
+        state = _load_state()
+        state["hide_on_close"] = self._hide_chk.isChecked()
+        _save_state(state)
+        self.accept()
 
 
 _INSTANCE_LOCK_FILE = cloud_quota.SECRETS_DIR / "gui.lock"
