@@ -2113,7 +2113,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec())
 
 
