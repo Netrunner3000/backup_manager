@@ -27,7 +27,8 @@ if "--run-backup" in sys.argv:
     _script = Path.home() / "Documents" / "lab" / "_Admin" / "backup" / "backup_to_gdrive.sh"
     sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
 
-from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent
+import signal as _signal
+from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent, QFileSystemWatcher
 from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap
 from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
@@ -35,7 +36,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QListWidget, QTextEdit, QTextBrowser, QFileDialog, QMessageBox, QDialog,
     QPlainTextEdit, QListWidgetItem, QFrame, QScrollArea, QProgressBar,
     QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QFormLayout, QComboBox,
-    QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon, QMenu, QCheckBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon, QMenu, QCheckBox, QSpinBox,
 )
 
 import cloud_quota
@@ -613,6 +614,21 @@ def last_backup_age_hours() -> float | None:
             except ValueError:
                 pass
     return None
+
+
+def last_sync_per_folder() -> dict:
+    """Return {folder_name: 'YYYY-MM-DD HH:MM:SS'} from the most recent OK line per folder."""
+    result = {}
+    logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True)
+    for log_path in logs:
+        text = Path(log_path).read_text(errors="replace")
+        for m in re.finditer(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+OK: (.+)", text):
+            folder = m.group(2).strip()
+            if folder not in result:
+                result[folder] = m.group(1)
+        if len(result) >= 50:
+            break
+    return result
 
 
 def _system_dark_mode() -> bool:
@@ -1356,10 +1372,13 @@ class ExcludesDialog(QDialog):
             self.edit.setPlainText(EXCLUDES_FILE.read_text())
         layout.addWidget(self.edit)
         row = QHBoxLayout()
+        preview_btn = secondary_button("🔍 Preview matches")
+        preview_btn.clicked.connect(self.preview_matches)
         save = QPushButton("Save")
         save.clicked.connect(self.save)
         cancel = secondary_button("Cancel")
         cancel.clicked.connect(self.reject)
+        row.addWidget(preview_btn)
         row.addStretch()
         row.addWidget(cancel)
         row.addWidget(save)
@@ -1368,6 +1387,44 @@ class ExcludesDialog(QDialog):
     def save(self):
         EXCLUDES_FILE.write_text(self.edit.toPlainText())
         self.accept()
+
+    def preview_matches(self):
+        patterns = [l.strip() for l in self.edit.toPlainText().splitlines()
+                    if l.strip() and not l.startswith("#")]
+        if not patterns:
+            QMessageBox.information(self, "No patterns", "No exclude patterns to preview.")
+            return
+        folders = read_folders()[:3]
+        matches = []
+        for folder in folders:
+            src = str(DOCS / folder)
+            for pat in patterns[:15]:
+                rc, out, _ = run_cmd(
+                    ["find", src, "-name", pat, "-maxdepth", "6"], timeout=10)
+                for line in (out.strip().splitlines() or []):
+                    matches.append(line)
+                    if len(matches) >= 200:
+                        break
+                if len(matches) >= 200:
+                    break
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Exclude pattern matches")
+        dlg.resize(700, 420)
+        v = QVBoxLayout(dlg)
+        note = f"{len(matches)} paths matched across first {len(folders)} folder(s)" + \
+               (" (truncated)" if len(matches) >= 200 else "")
+        v.addWidget(QLabel(note if matches else "No matches found in the first 3 backed-up folders."))
+        viewer = QPlainTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setPlainText("\n".join(matches) or "(no matches)")
+        v.addWidget(viewer)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        ok = QPushButton("Close")
+        ok.clicked.connect(dlg.accept)
+        btn_row.addWidget(ok)
+        v.addLayout(btn_row)
+        dlg.exec()
 
 
 # ----------------------------------------------------------------------------
@@ -1486,6 +1543,7 @@ class BackupStatusCard(Card):
         super().__init__("Google Drive Backup", "Status, schedule, and manual run")
         self.proc = None
         self._dry_run = False
+        self._paused = False
         state = _load_state()
         ts = state.get("last_overdue_notify")
         self._last_overdue_notify: datetime | None = (
@@ -1528,6 +1586,9 @@ class BackupStatusCard(Card):
         self.run_btn.clicked.connect(self.run_backup)
         self.dry_btn = secondary_button("⚟  Dry run")
         self.dry_btn.clicked.connect(self.run_dry_run)
+        self.pause_btn = secondary_button("⏸  Pause")
+        self.pause_btn.clicked.connect(self.toggle_pause)
+        self.pause_btn.setEnabled(False)
         self.stop_btn = secondary_button("■  Stop")
         self.stop_btn.setProperty("danger", True)
         self.stop_btn.clicked.connect(self.stop_backup)
@@ -1536,6 +1597,7 @@ class BackupStatusCard(Card):
         self.history_btn.clicked.connect(lambda: BackupHistoryDialog(self).exec())
         runrow.addWidget(self.run_btn)
         runrow.addWidget(self.dry_btn)
+        runrow.addWidget(self.pause_btn)
         runrow.addWidget(self.stop_btn)
         runrow.addStretch()
         runrow.addWidget(self.history_btn)
@@ -1568,13 +1630,20 @@ class BackupStatusCard(Card):
         net_lbl.setObjectName("CardSubtitle")
         self.body(net_lbl)
 
+        # USB mount trigger: backup when a new volume appears in /Volumes.
+        self._known_volumes = set(os.listdir("/Volumes"))
+        self._vol_watcher = QFileSystemWatcher(["/Volumes"], self)
+        self._vol_watcher.directoryChanged.connect(self._on_volumes_changed)
+
     def _maybe_auto_backup(self):
-        """Run the backup automatically if the schedule is on, it's past 03:30,
-        and no backup has run since 03:30 today. Also notifies if >25 h overdue."""
+        """Run the backup automatically if the schedule is on, it's past the configured
+        time, and no backup has run since that time today. Also notifies if >25 h overdue."""
         if self.proc is not None:
             return  # already running
+        st = _load_state()
+        bk_h, bk_m = st.get("backup_hour", 3), st.get("backup_minute", 30)
+
         if not launchd_loaded():
-            # Even if schedule is off, warn if backup is very overdue.
             age = last_backup_age_hours()
             if age is not None and age > 25:
                 self._notify_overdue(
@@ -1583,14 +1652,12 @@ class BackupStatusCard(Card):
             return
 
         now = datetime.now()
-        if now.hour < 3 or (now.hour == 3 and now.minute < 30):
-            # Before the backup window: warn if it's been >25 h since last successful run.
+        if now.hour < bk_h or (now.hour == bk_h and now.minute < bk_m):
             age = last_backup_age_hours()
             if age is not None and age > 25:
                 self._notify_overdue(f"Last successful backup was {int(age)}h ago.")
             return
 
-        # Past 03:30 — check if a backup log exists for today with a timestamp >= 03:30.
         today_log = LOG_DIR / f"backup_{now.date()}.log"
         if today_log.exists():
             text = today_log.read_text(errors="replace")
@@ -1598,8 +1665,8 @@ class BackupStatusCard(Card):
                 r"\[(\d{4}-\d{2}-\d{2} (\d{2}):(\d{2}):\d{2})\] ===== Backup run started", text
             ):
                 h, mi = int(m.group(2)), int(m.group(3))
-                if h > 3 or (h == 3 and mi >= 30):
-                    return  # already ran today after 03:30
+                if h > bk_h or (h == bk_h and mi >= bk_m):
+                    return  # already ran today after the scheduled time
         self.run_backup()
 
     def _notify_overdue(self, message: str) -> None:
@@ -1614,7 +1681,7 @@ class BackupStatusCard(Card):
         _notify("Backup Control Center", message, "Backup overdue")
 
     def _preload_log(self) -> None:
-        """Show the tail of the most recent backup log at startup."""
+        """Show the tail of the most recent backup log at startup, restoring scroll position."""
         logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")))
         if not logs:
             return
@@ -1624,7 +1691,16 @@ class BackupStatusCard(Card):
             return
         tail = "\n".join(text.splitlines()[-60:])
         self.log.setPlainText(tail)
-        self.log.moveCursor(QTextCursor.End)
+        saved_pos = _load_state().get("log_scroll_pos", -1)
+        if saved_pos >= 0:
+            self.log.verticalScrollBar().setValue(saved_pos)
+        else:
+            self.log.moveCursor(QTextCursor.End)
+
+    def save_log_scroll(self) -> None:
+        state = _load_state()
+        state["log_scroll_pos"] = self.log.verticalScrollBar().value()
+        _save_state(state)
 
     def _on_reachability_changed(self, reachability):
         if reachability == QNetworkInformation.Reachability.Online:
@@ -1641,20 +1717,75 @@ class BackupStatusCard(Card):
         if age is None or age > 12:
             self.run_backup()
 
+    def _on_volumes_changed(self, _path):
+        current = set(os.listdir("/Volumes"))
+        new_vols = current - self._known_volumes
+        self._known_volumes = current
+        if new_vols and launchd_loaded():
+            # New USB drive mounted — back up after 10 s if overdue by >6 h.
+            QTimer.singleShot(10_000, self._backup_on_usb_mount)
+
+    def _backup_on_usb_mount(self):
+        if self.proc is not None:
+            return
+        age = last_backup_age_hours()
+        if age is None or age > 6:
+            self.run_backup()
+
+    def run_single_folder(self, folder: str):
+        """Run rsync for one folder only (triggered from Folders card right-click)."""
+        if self.proc is not None:
+            QMessageBox.information(self, "Busy", "Stop the running backup before starting a new one.")
+            return
+        if not DEST_ROOT.exists():
+            self.status_lbl.setText("⚠ Google Drive not mounted — cannot run backup.")
+            return
+        src = str(DOCS / folder) + "/"
+        dest = str(DEST_ROOT / folder) + "/"
+        self._dry_run = False
+        self._paused = False
+        self.log.clear()
+        self.log.insertPlainText(f"=== Quick backup: {folder} ===\n\n")
+        self.proc = QProcess(self)
+        self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self._read_output)
+        self.proc.finished.connect(self._finished)
+        self.run_btn.setEnabled(False)
+        self.dry_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
+        self.stop_btn.setEnabled(True)
+        self.proc.start("/opt/homebrew/bin/rsync", [
+            "-rltvh", "--update", "--modify-window=2",
+            "--no-perms", "--no-owner", "--no-group",
+            f"--exclude-from={EXCLUDES_FILE}",
+            "--stats", "--itemize-changes",
+            src, dest,
+        ])
+
     def refresh_status(self):
         info, _ = last_backup_info()
         self.status_lbl.setText(info)
 
     def refresh_schedule(self):
         loaded = launchd_loaded()
+        st = _load_state()
+        bk_h, bk_m = st.get("backup_hour", 3), st.get("backup_minute", 30)
+        time_str = f"{bk_h:02d}:{bk_m:02d}"
         self.sched_lbl.setText(
-            "🕒 Nightly schedule (03:30): " + ("ENABLED" if loaded else "disabled"))
+            f"🕒 Nightly schedule ({time_str}): " + ("ENABLED" if loaded else "disabled"))
         self.sched_btn.setText("Disable" if loaded else "Enable")
 
     def refresh_wake(self):
         active = wake_schedule_active()
+        st = _load_state()
+        bk_h, bk_m = st.get("backup_hour", 3), st.get("backup_minute", 30)
+        wake_m = bk_m - 5
+        wake_h = bk_h
+        if wake_m < 0:
+            wake_m += 60
+            wake_h = (bk_h - 1) % 24
         self.wake_lbl.setText(
-            "⏰ Wake Mac at 03:25 for backup: " + ("ENABLED" if active else "disabled"))
+            f"⏰ Wake Mac at {wake_h:02d}:{wake_m:02d} for backup: " + ("ENABLED" if active else "disabled"))
         self.wake_btn.setText("Disable" if active else "Enable")
 
     def refresh_login_item(self):
@@ -1705,6 +1836,7 @@ class BackupStatusCard(Card):
         self.proc.finished.connect(self._finished)
         self.run_btn.setEnabled(False)
         self.dry_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         self.proc.start("/bin/bash", [str(SCRIPT)])
 
@@ -1725,11 +1857,28 @@ class BackupStatusCard(Card):
         self.proc.finished.connect(self._finished)
         self.run_btn.setEnabled(False)
         self.dry_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         self.proc.start("/bin/bash", [str(SCRIPT)])
 
+    def toggle_pause(self):
+        if self.proc is None:
+            return
+        pid = self.proc.processId()
+        if not self._paused:
+            os.kill(pid, _signal.SIGSTOP)
+            self._paused = True
+            self.pause_btn.setText("▶  Resume")
+        else:
+            os.kill(pid, _signal.SIGCONT)
+            self._paused = False
+            self.pause_btn.setText("⏸  Pause")
+
     def stop_backup(self):
         if self.proc is not None:
+            if self._paused:
+                os.kill(self.proc.processId(), _signal.SIGCONT)
+                self._paused = False
             self.proc.kill()
 
     def _read_output(self):
@@ -1742,8 +1891,11 @@ class BackupStatusCard(Card):
     def _finished(self):
         was_dry = self._dry_run
         self._dry_run = False
+        self._paused = False
         self.run_btn.setEnabled(True)
         self.dry_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.pause_btn.setText("⏸  Pause")
         self.stop_btn.setEnabled(False)
         self.proc = None
         self.refresh_status()
@@ -1759,10 +1911,14 @@ class BackupStatusCard(Card):
 # Backed-up folders card
 # ----------------------------------------------------------------------------
 class FoldersCard(Card):
+    single_backup_requested = Signal(str)  # folder name
+
     def __init__(self):
         super().__init__("Backed-up Folders", "What gets rsync'd to Google Drive")
         self.list = QListWidget()
         self.list.setFixedHeight(120)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._folder_context_menu)
         self.body(self.list)
 
         row = QHBoxLayout()
@@ -1786,8 +1942,13 @@ class FoldersCard(Card):
 
     def reload_folders(self):
         self.list.clear()
+        sync_times = last_sync_per_folder()
         for f in read_folders():
-            self.list.addItem(QListWidgetItem(f))
+            last = sync_times.get(f)
+            display = f"{f}   —   last synced: {last}" if last else f"{f}   —   never synced"
+            item = QListWidgetItem(display)
+            item.setData(Qt.UserRole, f)
+            self.list.addItem(item)
         self.total_lbl.setText("Backup set size: calculating…")
         self.worker = SizeWorker(read_folders())
         self.worker.done.connect(lambda sizes, total: self.total_lbl.setText(
@@ -1816,18 +1977,29 @@ class FoldersCard(Card):
         item = self.list.currentItem()
         if not item:
             return
-        folder_name = item.text()
+        folder_name = item.data(Qt.UserRole) or item.text()
         answer = QMessageBox.question(
-            self, "Remove folder",
+            self, “Remove folder”,
             f'Remove “{folder_name}” from the backup?\n\nFiles already in Google Drive are not deleted.',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
             return
-        folders = [f for f in read_folders() if f != item.text()]
+        folders = [f for f in read_folders() if f != folder_name]
         write_folders(folders)
         self.reload_folders()
+
+    def _folder_context_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if not item:
+            return
+        folder = item.data(Qt.UserRole) or item.text()
+        menu = QMenu(self)
+        backup_action = menu.addAction(f”▶ Back up '{folder}' now”)
+        action = menu.exec(self.list.viewport().mapToGlobal(pos))
+        if action == backup_action:
+            self.single_backup_requested.emit(folder)
 
     def edit_excludes(self):
         ExcludesDialog(self).exec()
@@ -2236,7 +2408,7 @@ class MainWindow(QMainWindow):
         header.addWidget(self._theme_btn)
         settings_btn = secondary_button("⚙")
         settings_btn.setFixedWidth(36)
-        settings_btn.clicked.connect(lambda: SettingsDialog(self).exec())
+        settings_btn.clicked.connect(self._open_settings)
         header.addWidget(settings_btn)
         outer.addLayout(header)
 
@@ -2258,6 +2430,9 @@ class MainWindow(QMainWindow):
         scroll.setWidget(content)
         self.setCentralWidget(scroll)
 
+        # Single-folder quick backup from Folders card right-click.
+        self.folders_card.single_backup_requested.connect(self.backup_card.run_single_folder)
+
         # Tray icon — patch backup_card._finished to keep tray in sync.
         self.tray = BackupTrayIcon(self)
         original_finished = self.backup_card._finished
@@ -2270,6 +2445,12 @@ class MainWindow(QMainWindow):
 
         # Live dark mode: re-theme when system appearance changes.
         QApplication.instance().paletteChanged.connect(self._on_palette_changed)
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self)
+        if dlg.exec():
+            self.backup_card.refresh_schedule()
+            self.backup_card.refresh_wake()
 
     def _toggle_theme(self):
         global _DARK
@@ -2288,6 +2469,7 @@ class MainWindow(QMainWindow):
             self.storage_card.refresh()
 
     def closeEvent(self, event):
+        self.backup_card.save_log_scroll()
         if _load_state().get("hide_on_close", False):
             event.ignore()
             self.hide()
@@ -2321,11 +2503,13 @@ class BackupTrayIcon(QSystemTrayIcon):
         # Use the app's icon asset if available, fall back to a built-in stock icon.
         icon_path = Path(__file__).resolve().parent / "assets" / "icon.icns"
         if icon_path.exists():
-            self.setIcon(QIcon(str(icon_path)))
+            self._normal_icon = QIcon(str(icon_path))
         else:
-            self.setIcon(QIcon.fromTheme("document-save",
-                         QApplication.style().standardIcon(
-                             QApplication.style().StandardPixmap.SP_DriveHDIcon)))
+            self._normal_icon = QIcon.fromTheme("document-save",
+                               QApplication.style().standardIcon(
+                                   QApplication.style().StandardPixmap.SP_DriveHDIcon))
+        self._warning_icon = self._make_warning_icon(self._normal_icon)
+        self.setIcon(self._normal_icon)
 
         menu = QMenu()
         self._status_action = menu.addAction("Checking…")
@@ -2338,19 +2522,49 @@ class BackupTrayIcon(QSystemTrayIcon):
                                               window.backup_card.run_backup()))
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
-        quit_action.triggered.connect(QApplication.quit)
+        quit_action.triggered.connect(self._quit)
         self.setContextMenu(menu)
 
         self.activated.connect(self._activated)
         self.update_status()
         self.show()
 
+    @staticmethod
+    def _make_warning_icon(base: QIcon) -> QIcon:
+        from PySide6.QtGui import QPainter, QBrush
+        px = base.pixmap(64, 64)
+        p = QPainter(px)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor("#FF9500")))
+        p.drawEllipse(42, 42, 20, 20)
+        p.end()
+        return QIcon(px)
+
     def update_status(self, info: str | None = None):
         if info is None:
             info, _ = last_backup_info()
         short = info.replace("Last run: ", "").replace("No backups run yet.", "Never backed up")
+        age = last_backup_age_hours()
+        if age is not None and age > 25:
+            self.setIcon(self._warning_icon)
+            short = f"⚠ {short}"
+        else:
+            self.setIcon(self._normal_icon)
         self.setToolTip(f"Backup Control Center\n{short}")
         self._status_action.setText(short)
+
+    def _quit(self):
+        if _load_state().get("hide_on_close", False):
+            answer = QMessageBox.question(
+                None, "Quit Backup Control Center",
+                "Quit the app?\n\nThe nightly backup and network trigger will not run while it is closed.",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        QApplication.quit()
 
     def _show_window(self):
         self._window.show()
@@ -2389,6 +2603,27 @@ class SettingsDialog(QDialog):
         note.setObjectName("CardSubtitle")
         layout.addWidget(note)
 
+        layout.addWidget(QLabel("Nightly backup time:"))
+        time_row = QHBoxLayout()
+        self._hour_spin = QSpinBox()
+        self._hour_spin.setRange(0, 23)
+        self._hour_spin.setValue(state.get("backup_hour", 3))
+        self._hour_spin.setSuffix("h")
+        self._minute_spin = QSpinBox()
+        self._minute_spin.setRange(0, 59)
+        self._minute_spin.setSingleStep(15)
+        self._minute_spin.setValue(state.get("backup_minute", 30))
+        self._minute_spin.setSuffix("m")
+        time_row.addWidget(self._hour_spin)
+        time_row.addWidget(self._minute_spin)
+        time_row.addStretch()
+        layout.addLayout(time_row)
+
+        time_note = QLabel("The app must be open and 🕒 Nightly schedule must be enabled.")
+        time_note.setWordWrap(True)
+        time_note.setObjectName("CardSubtitle")
+        layout.addWidget(time_note)
+
         layout.addStretch()
 
         row = QHBoxLayout()
@@ -2404,6 +2639,8 @@ class SettingsDialog(QDialog):
     def _save(self):
         state = _load_state()
         state["hide_on_close"] = self._hide_chk.isChecked()
+        state["backup_hour"] = self._hour_spin.value()
+        state["backup_minute"] = self._minute_spin.value()
         _save_state(state)
         self.accept()
 

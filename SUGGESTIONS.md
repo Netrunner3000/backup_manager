@@ -14,38 +14,38 @@
 
 ## New suggestions — quick wins
 
-| # | Feature | Why |
+| # | Feature | Status |
 |---|---|---|
-| A | **Backup pause / resume** | Add a ⏸ Pause button that sends SIGSTOP to the rsync process and a ▶ Resume that sends SIGCONT. Useful when bandwidth is needed for something else mid-backup. |
-| B | **Keyboard shortcut Cmd+R to run backup** | Single line: `QShortcut(QKeySequence("Ctrl+R"), self, self.run_backup)`. Standard for "refresh/run" on macOS. |
-| C | **Tray icon badge on overdue** | Change the tray icon to a warning variant (e.g. orange dot overlay) when the backup is overdue, so it's visible at a glance without opening the app. |
-| D | **Restore last log scroll position** | Save the scroll position in `state.json` so the log widget re-opens where you left off instead of always at the bottom. |
-| E | **Confirm before Quit from tray** | When hide-on-close is enabled, Quit from the tray icon exits silently. Add a one-line confirmation dialog so it's harder to accidentally kill overnight backups. |
+| A | **Backup pause / resume** | ✅ Aug 2026 |
+| B | **Keyboard shortcut Cmd+R to run backup** | Skipped — not needed |
+| C | **Tray icon badge on overdue** | ✅ Aug 2026 |
+| D | **Restore last log scroll position** | ✅ Aug 2026 |
+| E | **Confirm before Quit from tray** | ✅ Aug 2026 |
 
 ---
 
 ## New suggestions — medium
 
-| # | Feature | Why |
+| # | Feature | Status |
 |---|---|---|
-| F | **Backup verification spot-check** | After each successful backup, pick 3–5 random files, compute their checksums locally and in Google Drive (via Drive API), and note any mismatch in the log. Catches silent rsync failures. |
-| G | **Storage quota trend chart** | Log used/total quota each refresh to a small SQLite or JSON file; draw a 30-day sparkline in the tile so you can see if you're growing toward a limit. |
-| H | **Restore helper** | A "Restore from Drive" button in the Backup card that rsync's a selected folder back from Google Drive to a local staging directory. Uses the same script infrastructure in reverse. |
-| I | **Per-folder backup status** | In the Backed-up Folders card, show the last sync timestamp per folder by scanning the log for per-folder "OK: <folder>" lines. Makes it obvious if one folder is always failing. |
-| J | **Exclude patterns preview** | In the Excludes dialog, add a "Preview matches" button that runs `find ~/Documents/<folder> -name <pattern>` for each pattern and shows what would be skipped, so you can verify your excludes before the next run. |
-| K | **Backup on USB drive mount** | `QFileSystemWatcher` can watch for new mount points. Trigger a backup when a USB drive appears — useful as a secondary local backup destination. |
+| F | **Backup verification spot-check** | Deferred (needs Drive API) |
+| G | **Storage quota trend chart** | Deferred (needs SQLite/chart lib) |
+| H | **Restore helper** | Deferred (v3 scope) |
+| I | **Per-folder backup status** | ✅ Aug 2026 |
+| J | **Exclude patterns preview** | ✅ Aug 2026 |
+| K | **Backup on USB drive mount** | ✅ Aug 2026 |
 
 ---
 
 ## New suggestions — bigger
 
-| # | Feature | Why |
+| # | Feature | Status |
 |---|---|---|
-| L | **S3 / Backblaze B2 as second destination** | Add an optional second rsync target (S3-compatible via `rclone`) so there's an offsite copy that isn't Google Drive. The backup script already supports pluggable destinations. |
-| M | **Email / webhook on backup failure** | When a backup finishes WITH ERRORS, POST to a configurable webhook URL (Slack, ntfy, Pushover) or send an email via SMTP. Macbook may be offline when you check it. |
-| N | **Backup schedule editor** | Currently hardcoded to 03:30. A time-picker in Settings lets you choose any hour. Stores in `state.json`; the polling timer reads it each tick. |
-| O | **Quick-backup a single folder** | Right-click any row in Backed-up Folders → "Back up now" runs rsync for just that folder. Useful after a big edit to one project without waiting for the full nightly run. |
-| P | **Lab Hub integration — launch from hub** | Register `Backup Control Center` in Lab Hub's launcher list so it appears alongside Sentinel AI, SONAR, etc. Currently only openable from Spotlight or Login Item. |
+| L | **S3 / Backblaze B2 as second destination** | Deferred (v3 scope) |
+| M | **Email / webhook on backup failure** | Deferred (v3 scope) |
+| N | **Backup schedule editor** | ✅ Aug 2026 |
+| O | **Quick-backup a single folder** | ✅ Aug 2026 |
+| P | **Lab Hub integration — launch from hub** | Deferred (different repo) |
 
 ---
 
