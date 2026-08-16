@@ -6,15 +6,19 @@ backup (the rsync job in `_Admin/backup/`).
 
 ## What it does
 
-Single-screen, scrollable dashboard with five cards plus a menu-bar icon. Launches
+Single-screen, scrollable dashboard with seven cards plus a menu-bar icon. Launches
 maximized so the full dashboard is visible without resizing.
 
 ### Storage
-Local Disk, Google Drive, and Dropbox tiles — each with a fill progress bar (turns
-amber at 70 %, red at 90 %) and real account quota once connected via OAuth. Unmounted
-drives are hidden automatically. Duplicate CloudStorage folders for the same account are
-deduplicated. Storage tiles auto-refresh every 5 minutes and also refresh immediately
-when the Mac reconnects to the network.
+Local Disk, Google Drive, Dropbox, and iCloud Drive (local cache size) tiles — each
+with a fill progress bar (turns amber at 70 %, red at 90 %) and real account quota for
+Drive/Dropbox once connected via OAuth. Unmounted drives are hidden automatically.
+Duplicate CloudStorage folders for the same account are deduplicated. Storage tiles
+auto-refresh every 5 minutes and also refresh immediately when the Mac reconnects to
+the network.
+
+The **iCloud Drive** tile shows the local cache size measured with `du` — Apple has no
+public cloud quota API, so true cloud total is unavailable.
 
 - **☁ Cloud accounts…** — paste a one-time OAuth Client ID/Secret (Google) or App
   Key/Secret (Dropbox), then Connect each mount to show its real used/total quota.
@@ -33,8 +37,9 @@ launch. Controls:
 |---|---|
 | **▶ Run backup now** | Starts the rsync backup immediately |
 | **⚟ Dry run** | Previews what rsync would copy — no files changed. Writes to `dryrun_*.log` so it never confuses the auto-backup detector |
-| **📋 History** | Table of the last 15 backup runs: date, start time, duration, colour-coded status |
+| **📋 History** | Table of the last 15 backup runs: date, start time, duration, bytes transferred (from rsync --stats), colour-coded status, and per-row log viewer |
 | **■ Stop** | Kills the running backup or dry run |
+| **📄 View log** | Opens the raw rsync log for the selected History row |
 
 Three toggles:
 
@@ -80,7 +85,24 @@ Right-click for **Show**, **Run Backup Now**, and **Quit** — no need to open t
 window to check status or trigger a run.
 
 ### Dark mode
-Automatically matches the system light/dark appearance at launch.
+Automatically matches the system light/dark appearance at launch, and updates live when
+the system appearance changes. A **☀/🌙 toggle** in the header lets you flip the theme
+manually without changing system settings.
+
+### Settings (⚙)
+A settings dialog accessible from the header:
+
+| Setting | Effect |
+|---|---|
+| **Hide to menu bar on close** | Closing the window hides the app instead of quitting — it lives in the menu bar until you choose Quit from the icon |
+
+### Time Machine
+Last snapshot timestamp, running/idle status, and a **Back up now** button. Refreshes
+every 5 minutes alongside the other cards.
+
+### Lab Health right-click
+Right-click any row in the Lab Health table to **Open in Finder** or **Open in Terminal**
+for that project.
 
 ---
 
