@@ -35,6 +35,7 @@ last 60 lines of the most recent run so status is visible without triggering a n
 | Button | Effect |
 |---|---|
 | **▶ Run backup now** | Starts the rsync backup immediately (aborts with a warning if Google Drive is not mounted) |
+| **⏸ Pause / ▶ Resume** | Suspends or resumes the running rsync process (SIGSTOP/SIGCONT) — useful when bandwidth is needed mid-backup |
 | **⚟ Dry run** | Previews what rsync would copy — no files changed; writes to `dryrun_*.log` so it never confuses the auto-backup detector |
 | **📋 History** | Last 15 runs: date, start time, duration, bytes transferred, colour-coded status, and a **📄 View log** button for the selected row |
 | **■ Stop** | Kills the running backup or dry run |
@@ -43,8 +44,8 @@ last 60 lines of the most recent run so status is visible without triggering a n
 
 | Toggle | Effect |
 |---|---|
-| **🕒 Nightly schedule (03:30)** | Enables the in-app auto-backup timer |
-| **⏰ Wake Mac at 03:25** | `pmset` wake schedule — **required** for overnight backups when the Mac sleeps |
+| **🕒 Nightly schedule** | Enables the in-app auto-backup timer (time is configurable in ⚙ Settings) |
+| **⏰ Wake Mac** | `pmset` wake schedule set 5 min before the backup time — **required** for overnight backups when the Mac sleeps |
 | **🚀 Open at login** | Registers the app as a macOS Login Item |
 | **🌐 Network trigger** | Label showing whether the network-reconnect trigger loaded successfully |
 
@@ -53,12 +54,20 @@ last 60 lines of the most recent run so status is visible without triggering a n
 - If the last successful backup is more than 25 hours ago, an overdue warning fires —
   at most once per hour (cooldown persists across restarts) so a long sleep doesn't
   flood Notification Centre.
+- The tray icon shows an orange dot overlay when a backup is overdue.
 
 ---
 
 ### Backed-up Folders
 Add or remove folders from the rsync job (confirmation required before removal), edit
 rsync exclude patterns, and see the total local size of the backup set.
+
+- Each folder shows its **last-synced timestamp** (scanned from the most recent log).
+- **Right-click any folder** → "Back up now" runs rsync for just that one folder — no
+  need to wait for the full nightly run after a large edit.
+- **Exclude patterns → 🔍 Preview matches** — runs `find` against your backed-up folders
+  for each pattern and shows what would be skipped, so you can verify excludes before
+  the next run.
 
 ---
 
@@ -95,7 +104,9 @@ Quick launchers and helpers:
 
 ### Menu-bar icon
 Tooltip shows last backup timestamp. Right-click for **Show**, **Run Backup Now**,
-and **Quit**.
+and **Quit**. The icon shows an orange dot overlay when the backup is overdue. When
+"Hide to menu bar on close" is enabled, **Quit** asks for confirmation so overnight
+backups can't be killed accidentally.
 
 ---
 
@@ -110,6 +121,7 @@ without touching system settings.
 | Setting | Effect |
 |---|---|
 | **Hide to menu bar on close** | Closing the window hides the app instead of quitting; use Quit from the menu-bar icon to fully exit |
+| **Backup time** | Hour and minute for the nightly schedule (default 03:30). The Wake Mac toggle sets a `pmset` wake 5 minutes before this time. |
 
 ---
 
@@ -119,7 +131,7 @@ without touching system settings.
 - **iCloud Drive and Proton Drive will never show real cloud quota.** No public API
   exists. The iCloud tile shows local cache size only via `du`.
 - **Sleep mode suspends everything.** No timer, app, or background process runs while
-  the Mac is asleep. Enable **⏰ Wake Mac at 03:25** so the Mac wakes itself.
+  the Mac is asleep. Enable **⏰ Wake Mac** so the Mac wakes itself before the scheduled time.
 
 ---
 
@@ -130,19 +142,23 @@ removed `spctl --add` and Gatekeeper blocks unsigned apps in non-interactive lau
 contexts.
 
 **Recommended setup:**
-1. Enable **🕒 Nightly schedule (03:30)**.
-2. Enable **⏰ Wake Mac at 03:25** so the Mac powers on before the window.
-3. Enable **🚀 Open at login** so the app is running when the Mac wakes.
+1. Set the backup time in **⚙ Settings** (default 03:30).
+2. Enable **🕒 Nightly schedule**.
+3. Enable **⏰ Wake Mac** so the Mac powers on 5 minutes before the scheduled time.
+4. Enable **🚀 Open at login** so the app is running when the Mac wakes.
 
 **Timer flow:**
 1. 5-minute polling timer runs while the app is open.
-2. On each tick (and 10 s after launch): if the schedule is enabled, it's past 03:30,
-   and no backup has started today at or after 03:30 — the backup fires.
+2. On each tick (and 10 s after launch): if the schedule is enabled, it's past the
+   configured time, and no backup has started today at or after that time — the backup fires.
 3. rsync runs under the app's Full Disk Access grant.
 
 **Network-triggered backup:** when the Mac comes back online (sleep wake, VPN, outage),
 if the last successful backup was more than 12 hours ago and the schedule is enabled,
 the app waits 30 seconds for Google Drive to mount then starts a backup automatically.
+
+**USB mount trigger:** when any new volume appears under `/Volumes`, if the last backup
+was more than 6 hours ago, a backup starts automatically after a 10-second settle delay.
 
 The launchd job (`com.andreas.gdrive-backup`) remains installed as a best-effort
 fallback but the reliable path on macOS 26 is the in-app timer.
