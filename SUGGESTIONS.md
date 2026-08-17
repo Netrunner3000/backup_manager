@@ -95,3 +95,13 @@
 | rsync --stats + --itemize-changes in all backup runs | Aug 2026 |
 | iCloud local cache tile (du-based, no cloud API) | Aug 2026 |
 | Time Machine status card | Aug 2026 |
+| Backup pause / resume (SIGSTOP/SIGCONT) | Aug 2026 |
+| Tray icon badge (orange dot) when overdue | Aug 2026 |
+| Log scroll position restored on relaunch | Aug 2026 |
+| Confirm before Quit from tray (when hide-on-close enabled) | Aug 2026 |
+| Per-folder last-synced timestamp in Folders card | Aug 2026 |
+| Exclude patterns "Preview matches" in Excludes dialog | Aug 2026 |
+| Backup triggered on USB volume mount | Aug 2026 |
+| Backup schedule time picker in Settings | Aug 2026 |
+| Quick-backup single folder (right-click in Folders card) | Aug 2026 |
+| Wake Mac time dynamically tracks backup time setting | Aug 2026 |
