@@ -14,10 +14,12 @@ Run:  python main.py   (needs PySide6 — see requirements.txt)
 import sys
 import fcntl
 import glob
+import json
 import os
 import re
 import shutil
 import subprocess
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -28,8 +30,8 @@ if "--run-backup" in sys.argv:
     sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
 
 import signal as _signal
-from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent, QFileSystemWatcher
-from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent, QFileSystemWatcher, QPointF
+from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap, QPainter, QPen, QPolygonF
 from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -684,6 +686,36 @@ def _save_state(data: dict) -> None:
     _STATE_FILE.write_text(json.dumps(data, indent=2))
 
 
+_QUOTA_HISTORY_FILE = cloud_quota.SECRETS_DIR / "quota_history.json"
+_QUOTA_HISTORY_MAX = 60  # samples per account key
+
+
+def _load_quota_history() -> dict:
+    if _QUOTA_HISTORY_FILE.exists():
+        try:
+            return json.loads(_QUOTA_HISTORY_FILE.read_text())
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def _append_quota_sample(account_key: str, used: int, total: int) -> None:
+    history = _load_quota_history()
+    samples = history.get(account_key, [])
+    samples.append({"ts": datetime.now().isoformat(timespec="minutes"), "used": used, "total": total})
+    samples = samples[-_QUOTA_HISTORY_MAX:]
+    history[account_key] = samples
+    try:
+        cloud_quota.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+        _QUOTA_HISTORY_FILE.write_text(json.dumps(history))
+    except OSError:
+        pass
+
+
+def _get_quota_history(account_key: str) -> list:
+    return _load_quota_history().get(account_key, [])
+
+
 # ----------------------------------------------------------------------------
 # Background worker for folder sizes (keeps UI responsive)
 # ----------------------------------------------------------------------------
@@ -792,6 +824,47 @@ class LabHealthWorker(QThread):
 TILE_WIDTH = 230
 
 
+class SparklineWidget(QWidget):
+    """Mini line chart showing % quota used over the last N samples."""
+
+    def __init__(self, samples: list, parent=None):
+        super().__init__(parent)
+        self._pcts = [s["used"] / s["total"] * 100 for s in samples if s.get("total")]
+        self.setFixedHeight(28)
+        self.setToolTip(f"{len(self._pcts)} quota samples (last {len(self._pcts)} refreshes)")
+
+    def paintEvent(self, _event):
+        if len(self._pcts) < 2:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        pad = 2
+        lo, hi = min(self._pcts), max(self._pcts)
+        rng = max(hi - lo, 1.0)
+
+        def pt(i):
+            x = pad + (i / (len(self._pcts) - 1)) * (w - 2 * pad)
+            y = h - pad - ((self._pcts[i] - lo) / rng) * (h - 2 * pad)
+            return QPointF(x, y)
+
+        last_pct = self._pcts[-1]
+        if last_pct >= 90:
+            color = QColor("#FF453A" if _DARK else "#FF3B30")
+        elif last_pct >= 70:
+            color = QColor("#FF9F0A" if _DARK else "#FF9500")
+        else:
+            color = QColor("#0A84FF" if _DARK else "#007AFF")
+
+        poly = QPolygonF([pt(i) for i in range(len(self._pcts))])
+        pen = QPen(color, 1.5)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPolyline(poly)
+        p.end()
+
+
 class StorageTile(QFrame):
     def __init__(self, name, path, exists, on_connect_request=None,
                  provider_override=None, display_account=None, quota_only=False):
@@ -838,6 +911,9 @@ class StorageTile(QFrame):
         self.bar.setTextVisible(False)
         layout.addWidget(self.bar)
 
+        self._spark: SparklineWidget | None = None
+        self._tile_layout = layout
+
         self.detail_lbl = QLabel()
         self.detail_lbl.setObjectName("TileFree")
         self.detail_lbl.setWordWrap(True)
@@ -881,6 +957,17 @@ class StorageTile(QFrame):
             self.detail_lbl.setText(f"Failed: {err}")
             self.reconnect_btn.setVisible(True)
 
+    def _refresh_sparkline(self):
+        samples = _get_quota_history(self.account_key)
+        if len(samples) < 3:
+            return
+        if self._spark is not None:
+            self._spark.deleteLater()
+        self._spark = SparklineWidget(samples, self)
+        # Insert just after the progress bar (index 3 in the tile layout)
+        bar_idx = self._tile_layout.indexOf(self.bar)
+        self._tile_layout.insertWidget(bar_idx + 1, self._spark)
+
     def _set_bar(self, pct_used):
         self.bar.setValue(pct_used)
         if pct_used >= 90:
@@ -921,6 +1008,8 @@ class StorageTile(QFrame):
                     self.detail_lbl.setText(
                         f"{human_size(used)} used of {human_size(total)}  (account quota)"
                     )
+                    _append_quota_sample(self.account_key, used, total)
+                    self._refresh_sparkline()
                 else:
                     self.bar.setValue(0)
                     self.detail_lbl.setText(f"{human_size(used)} used  (unlimited plan)")
@@ -1888,6 +1977,32 @@ class BackupStatusCard(Card):
         self.log.setTextCursor(cursor)
         self.log.insertPlainText(data)
 
+    def _fire_webhook(self, message: str):
+        url = _load_state().get("webhook_url", "").strip()
+        if not url:
+            return
+        payload = json.dumps({"text": message, "message": message}).encode()
+
+        class _WebhookThread(QThread):
+            def __init__(self, url, payload):
+                super().__init__()
+                self._url, self._payload = url, payload
+
+            def run(self):
+                try:
+                    req = urllib.request.Request(
+                        self._url, data=self._payload,
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    urllib.request.urlopen(req, timeout=15)
+                except Exception:
+                    pass
+
+        t = _WebhookThread(url, payload)
+        t.finished.connect(t.deleteLater)
+        t.start()
+
     def _finished(self):
         was_dry = self._dry_run
         self._dry_run = False
@@ -1905,6 +2020,7 @@ class BackupStatusCard(Card):
                 _notify("Backup Control Center", "Backup completed successfully.", "Google Drive Backup")
             elif "ERRORS" in info:
                 _notify("Backup Control Center", "Backup finished with errors — check the log.", "Google Drive Backup")
+                self._fire_webhook("Backup Control Center: backup finished WITH ERRORS. Check the log.")
 
 
 # ----------------------------------------------------------------------------
@@ -1979,8 +2095,8 @@ class FoldersCard(Card):
             return
         folder_name = item.data(Qt.UserRole) or item.text()
         answer = QMessageBox.question(
-            self, “Remove folder”,
-            f'Remove “{folder_name}” from the backup?\n\nFiles already in Google Drive are not deleted.',
+            self, "Remove folder",
+            f'Remove "{folder_name}" from the backup?\n\nFiles already in Google Drive are not deleted.',
             QMessageBox.Yes | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
@@ -1996,7 +2112,7 @@ class FoldersCard(Card):
             return
         folder = item.data(Qt.UserRole) or item.text()
         menu = QMenu(self)
-        backup_action = menu.addAction(f”▶ Back up '{folder}' now”)
+        backup_action = menu.addAction(f"▶ Back up '{folder}' now")
         action = menu.exec(self.list.viewport().mapToGlobal(pos))
         if action == backup_action:
             self.single_backup_requested.emit(folder)
@@ -2624,6 +2740,20 @@ class SettingsDialog(QDialog):
         time_note.setObjectName("CardSubtitle")
         layout.addWidget(time_note)
 
+        layout.addWidget(QLabel("Webhook URL on failure (optional):"))
+        self._webhook_edit = QLineEdit()
+        self._webhook_edit.setPlaceholderText("https://ntfy.sh/your-topic  or  https://hooks.slack.com/…")
+        self._webhook_edit.setText(state.get("webhook_url", ""))
+        layout.addWidget(self._webhook_edit)
+
+        webhook_note = QLabel(
+            "A POST is sent here when a backup finishes with errors. "
+            "Works with ntfy, Slack, Pushover, or any webhook endpoint."
+        )
+        webhook_note.setWordWrap(True)
+        webhook_note.setObjectName("CardSubtitle")
+        layout.addWidget(webhook_note)
+
         layout.addStretch()
 
         row = QHBoxLayout()
@@ -2641,6 +2771,7 @@ class SettingsDialog(QDialog):
         state["hide_on_close"] = self._hide_chk.isChecked()
         state["backup_hour"] = self._hour_spin.value()
         state["backup_minute"] = self._minute_spin.value()
+        state["webhook_url"] = self._webhook_edit.text().strip()
         _save_state(state)
         self.accept()
 
