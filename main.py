@@ -2796,7 +2796,12 @@ def _acquire_instance_lock():
 
 
 def main():
+    background = "--background" in sys.argv
+    if background:
+        sys.argv.remove("--background")
     if not _acquire_instance_lock():
+        if background:
+            sys.exit(0)
         # Show a native alert, then bring the existing window to front.
         subprocess.run(
             ["osascript", "-e",
@@ -2814,7 +2819,8 @@ def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
-    win.showMaximized()
+    if not background:
+        win.showMaximized()
     sys.exit(app.exec())
 
 
