@@ -170,7 +170,9 @@ fallback but the reliable path on macOS 26 is the in-app timer.
 
 ## Single-instance guard
 A second GUI instance shows a native alert and brings the existing window to front.
-Does not affect `--run-backup` headless mode.
+Does not affect `--run-backup` headless mode. Launching with `--background` skips the
+alert (exits quietly if another instance is already running) and opens without
+maximizing the window — for starting the app unobtrusively without stealing focus.
 
 ---
 
