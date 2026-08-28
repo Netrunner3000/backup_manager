@@ -224,6 +224,44 @@ Re-run after any change to `main.py` or `cloud_quota.py`, then re-grant Full Dis
 ---
 
 ## Config files
+
+This app owns no configuration of its own for the backup — it reads and writes
+the same files the shell script does, so the script keeps working with the app
+closed, uninstalled, or replaced. Everything lives in `_Admin/backup/`:
+
+    _Admin/backup/
+    ├── backup_to_gdrive.sh              the backup itself; everything else feeds it
+    ├── backup_folders.txt               WHICH folders (one per line, relative to ~/Documents)
+    ├── gdrive_backup_excludes.txt       WHAT to skip inside them (rsync patterns)
+    ├── com.andreas.gdrive-backup.plist  WHEN, as a launchd fallback
+    ├── logs/
+    │   ├── backup_YYYY-MM-DD.log        one per real run — the app reads these for
+    │   │                                  status, history, and per-folder timestamps
+    │   └── dryrun_*.log                 previews, named apart so they never count
+    │                                      as a backup having happened
+    ├── SETUP.md                         first-time install
+    ├── BACKUP_STRATEGY.md               why this exists alongside iCloud and Time Machine
+    └── PROTON_VAULT.md                  the encrypted vault for sensitive documents
+
+How they relate:
+
+* **`backup_folders.txt` is the source of truth** for what gets backed up. The
+  Folders card edits this file and nothing else — do not hardcode the list
+  anywhere, or the app and the nightly run will disagree.
+* **The logs are the app's database.** There is no separate state store for
+  backup history: last-run status, the History table, and the per-folder
+  "last synced" column are all parsed back out of these dated files. That is why
+  dry runs are written to `dryrun_*.log` — a preview must not look like a run.
+* **`DRY_RUN=1` previews without writing.** `DRY_RUN=1 bash backup_to_gdrive.sh`
+  adds `--dry-run` and redirects the output to a dry-run log.
+* **The plist is a fallback, not the primary schedule.** The app runs the
+  nightly backup itself while it is open; launchd covers the case where it is
+  not. See *How the nightly backup works*.
+
+The app's own state — window preferences, the notification cooldown, OAuth
+tokens, quota history — is separate, and lives outside this folder. See
+*Credentials & state*.
+
 | File | Purpose |
 |---|---|
 | `_Admin/backup/backup_folders.txt` | Folders included in the rsync job |

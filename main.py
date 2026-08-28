@@ -686,6 +686,38 @@ def _save_state(data: dict) -> None:
     _STATE_FILE.write_text(json.dumps(data, indent=2))
 
 
+# How long an overdue-backup notice stays quiet after being sent. Persisted to
+# state.json rather than kept in memory: the app is a menu-bar resident that
+# gets relaunched, and a cooldown that resets on restart is no cooldown at all —
+# a login loop would notify every time.
+OVERDUE_COOLDOWN_S = 3600
+_OVERDUE_KEY = "last_overdue_notify"
+
+
+def overdue_notice_due(last, now, cooldown: float = OVERDUE_COOLDOWN_S) -> bool:
+    """Whether an overdue notice may be sent again yet."""
+    if last is None:
+        return True
+    return (now - last).total_seconds() >= cooldown
+
+
+def load_overdue_stamp():
+    """When the last overdue notice went out, across restarts."""
+    raw = _load_state().get(_OVERDUE_KEY)
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def save_overdue_stamp(when) -> None:
+    state = _load_state()
+    state[_OVERDUE_KEY] = when.isoformat()
+    _save_state(state)
+
+
 _QUOTA_HISTORY_FILE = cloud_quota.SECRETS_DIR / "quota_history.json"
 _QUOTA_HISTORY_MAX = 60  # samples per account key
 
@@ -1633,11 +1665,7 @@ class BackupStatusCard(Card):
         self.proc = None
         self._dry_run = False
         self._paused = False
-        state = _load_state()
-        ts = state.get("last_overdue_notify")
-        self._last_overdue_notify: datetime | None = (
-            datetime.fromisoformat(ts) if ts else None
-        )
+        self._last_overdue_notify: datetime | None = load_overdue_stamp()
 
         info, _ = last_backup_info()
         self.status_lbl = QLabel(info)
@@ -1761,12 +1789,10 @@ class BackupStatusCard(Card):
     def _notify_overdue(self, message: str) -> None:
         """Send an overdue-backup notification at most once per hour, persisted across restarts."""
         now = datetime.now()
-        if self._last_overdue_notify and (now - self._last_overdue_notify).total_seconds() < 3600:
+        if not overdue_notice_due(self._last_overdue_notify, now):
             return
         self._last_overdue_notify = now
-        state = _load_state()
-        state["last_overdue_notify"] = now.isoformat()
-        _save_state(state)
+        save_overdue_stamp(now)
         _notify("Backup Control Center", message, "Backup overdue")
 
     def _preload_log(self) -> None:

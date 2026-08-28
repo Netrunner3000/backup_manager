@@ -14,16 +14,16 @@
 - [x] `P2` `feature` `@ai` Per-folder last-synced timestamp in the Folders card
 - [x] `P2` `feature` `@ai` Backup triggered on USB volume mount
 - [x] `P1` `feature` `@ai` Backup schedule time picker in Settings
-- [ ] `P2` `testing` `@ai` Regression test for the overdue-notification cooldown persisted in `state.json`
-- [ ] `P3` `docs` `@ai` Document the `_Admin/backup/` file map in the README rather than only in the table
+- [x] `P2` `testing` `@ai` Regression test for the overdue-notification cooldown persisted in `state.json`
+- [x] `P3` `docs` `@ai` Document the `_Admin/backup/` file map in the README rather than only in the table
 
 ## v3 — blocked or deferred
 
 - [ ] `P1` `infra` `@me` **Developer ID code signing** — needs a paid Apple Developer account ($99/yr). Removes the Full Disk Access re-grant after every rebuild and makes the launchd fallback reliable. Cannot be done in code.
-- [ ] `P2` `feature` `@me` Google Drive API credentials, so backup verification spot-checks can read remote checksums
+- [x] `P2` `feature` `@ai` Backup verification spot-check — no Drive API needed after all: the destination is a local Google Drive folder, so `verify.py` compares it directly (honouring the excludes, `--update` and `--modify-window=2`)
 - [ ] `P2` `feature` `@ai` S3 / Backblaze B2 as a second destination
-- [ ] `P2` `feature` `@ai` Email or webhook notification on backup failure
+- [x] `P2` `feature` `@ai` Email or webhook notification on backup failure — webhook shipped (`_fire_webhook`, URL in Settings)
 - [ ] `P3` `feature` `@ai` Restore helper — pick a dated log, restore what that run moved
-- [ ] `P3` `performance` `@ai` Storage quota trend chart (needs SQLite plus a chart lib)
+- [x] `P3` `performance` `@ai` Storage quota trend chart — shipped as a QPainter sparkline over persisted samples; needed neither SQLite nor a chart lib
 - [ ] `P3` `research` `@ai` Power Nap backup via an `SMAppService` helper daemon — unclear whether a custom daemon qualifies
 - [ ] `P3` `feature` `@ai` macOS Shortcuts action that triggers `--run-backup`
