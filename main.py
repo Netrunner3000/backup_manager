@@ -2612,17 +2612,15 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.backup_card.save_log_scroll()
+        event.ignore()
+        self.hide()
         if _load_state().get("hide_on_close", False):
-            event.ignore()
-            self.hide()
             self.tray.showMessage(
                 "Backup Control Center",
                 "Running in the menu bar. Click the icon to restore.",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000,
             )
-        else:
-            event.accept()
 
     def refresh_all(self):
         self.storage_card.refresh()
@@ -2847,6 +2845,7 @@ def main():
     global _DARK
     _DARK = _system_dark_mode()
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # tray icon keeps the app alive
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
     if not background:
