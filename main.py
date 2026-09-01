@@ -47,6 +47,11 @@ import cloud_quota
 # apply different inline styles for dark/light mode.
 _DARK: bool = False
 
+# Only the tray's Quit action sets this. Everything else that looks like a quit
+# — Cmd+Q, the dock's Quit item, closing the window — is intercepted and turned
+# into "hide to the menu bar" so the backup timers keep running.
+_REALLY_QUITTING: bool = False
+
 # ----------------------------------------------------------------------------
 # Paths / config
 # ----------------------------------------------------------------------------
@@ -2699,19 +2704,20 @@ class BackupTrayIcon(QSystemTrayIcon):
         self._status_action.setText(short)
 
     def _quit(self):
-        if _load_state().get("hide_on_close", False):
-            answer = QMessageBox.question(
-                None, "Quit Backup Control Center",
-                "Quit the app?\n\nThe nightly backup and network trigger will not run while it is closed.",
-                QMessageBox.Yes | QMessageBox.Cancel,
-                QMessageBox.Cancel,
-            )
-            if answer != QMessageBox.Yes:
-                return
+        answer = QMessageBox.question(
+            None, "Quit Backup Control Center",
+            "Quit the app?\n\nThe nightly backup, network trigger and USB trigger "
+            "will not run while it is closed.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        global _REALLY_QUITTING
+        _REALLY_QUITTING = True
         QApplication.quit()
 
     def _show_window(self):
-        self._window.show()
         self._window.show()
         self._window.raise_()
         self._window.activateWindow()
@@ -2823,6 +2829,32 @@ def _acquire_instance_lock():
         return False
 
 
+class QuitInterceptApp(QApplication):
+    """QApplication that refuses to die on Cmd+Q or the dock's Quit item.
+
+    macOS routes both of those to QEvent.Quit, which Qt would normally honour
+    even with setQuitOnLastWindowClosed(False). We swallow the event and hide
+    the window instead, so the tray icon — and with it the nightly schedule,
+    network trigger and USB trigger — stays alive. Only the tray's own Quit
+    action sets _REALLY_QUITTING and lets the event through.
+    """
+
+    def __init__(self, argv):
+        super().__init__(argv)
+        self._main_window = None
+
+    def set_window(self, win):
+        self._main_window = win
+
+    def event(self, e):
+        if e.type() == QEvent.Quit and not _REALLY_QUITTING:
+            e.ignore()
+            if self._main_window is not None:
+                self._main_window.close()  # routes through MainWindow.closeEvent → hide
+            return True
+        return super().event(e)
+
+
 def main():
     background = "--background" in sys.argv
     if background:
@@ -2844,10 +2876,11 @@ def main():
 
     global _DARK
     _DARK = _system_dark_mode()
-    app = QApplication(sys.argv)
+    app = QuitInterceptApp(sys.argv)
     app.setQuitOnLastWindowClosed(False)  # tray icon keeps the app alive
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
+    app.set_window(win)
     if not background:
         win.show()
     sys.exit(app.exec())
