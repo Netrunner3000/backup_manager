@@ -2516,8 +2516,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Backup Control Center")
-        self.resize(1000, 880)
-        self.setMinimumWidth(900)
+        self.resize(1120, 860)
+        self.setMinimumWidth(1020)
 
         scroll = SmartScrollArea()
         scroll.setObjectName("ScrollArea")
@@ -2527,7 +2527,7 @@ class MainWindow(QMainWindow):
         content = QWidget()
         content.setObjectName("ScrollContent")
         outer = QVBoxLayout(content)
-        outer.setContentsMargins(24, 20, 24, 24)
+        outer.setContentsMargins(20, 20, 20, 20)
         outer.setSpacing(16)
 
         header = QHBoxLayout()
