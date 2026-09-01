@@ -2712,7 +2712,7 @@ class BackupTrayIcon(QSystemTrayIcon):
 
     def _show_window(self):
         self._window.show()
-        self._window.showMaximized()
+        self._window.show()
         self._window.raise_()
         self._window.activateWindow()
 
@@ -2849,7 +2849,7 @@ def main():
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
     if not background:
-        win.showMaximized()
+        win.show()
     sys.exit(app.exec())
 
 
