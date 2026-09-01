@@ -2657,9 +2657,13 @@ class BackupTrayIcon(QSystemTrayIcon):
         self._status_action = menu.addAction("Checking…")
         self._status_action.setEnabled(False)
         menu.addSeparator()
-        show_action = menu.addAction("Show Backup Control Center")
+        show_action = menu.addAction("Open")
         show_action.triggered.connect(self._show_window)
-        run_action = menu.addAction("Run Backup Now")
+        menu.addSeparator()
+        dry_action = menu.addAction("Dry run")
+        dry_action.triggered.connect(lambda: (self._show_window(),
+                                              window.backup_card.run_dry_run()))
+        run_action = menu.addAction("Sync now")
         run_action.triggered.connect(lambda: (self._show_window(),
                                               window.backup_card.run_backup()))
         menu.addSeparator()
