@@ -30,7 +30,10 @@ if "--run-backup" in sys.argv:
     sys.exit(subprocess.run(["/bin/bash", str(_script)]).returncode)
 
 import signal as _signal
-from PySide6.QtCore import Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent, QFileSystemWatcher, QPointF
+from PySide6.QtCore import (
+    Qt, QThread, Signal, QProcess, QTimer, QProcessEnvironment, QEvent,
+    QFileSystemWatcher, QPointF, QRect, QSize, QPoint,
+)
 from PySide6.QtGui import QTextCursor, QColor, QIcon, QPixmap, QPainter, QPen, QPolygonF
 from PySide6.QtNetwork import QNetworkInformation
 from PySide6.QtWidgets import (
@@ -39,6 +42,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QListWidgetItem, QFrame, QScrollArea, QProgressBar,
     QGraphicsDropShadowEffect, QSizePolicy, QLineEdit, QFormLayout, QComboBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QSystemTrayIcon, QMenu, QCheckBox, QSpinBox,
+    QLayout,
 )
 
 import cloud_quota
@@ -46,11 +50,6 @@ import cloud_quota
 # Set by main() before creating QApplication; used by widgets that need to
 # apply different inline styles for dark/light mode.
 _DARK: bool = False
-
-# Only the tray's Quit action sets this. Everything else that looks like a quit
-# — Cmd+Q, the dock's Quit item, closing the window — is intercepted and turned
-# into "hide to the menu bar" so the backup timers keep running.
-_REALLY_QUITTING: bool = False
 
 # ----------------------------------------------------------------------------
 # Paths / config
@@ -1163,6 +1162,71 @@ class ICloudTile(QFrame):
             self.bar.setValue(0)
 
 
+class FlowLayout(QLayout):
+    """Lays widgets out left-to-right, wrapping to a new row when the width runs
+    out. The storage tile count is dynamic (mounts + manual accounts + iCloud),
+    so a fixed QHBoxLayout clips the rightmost tiles at any window size."""
+
+    def __init__(self, parent=None, spacing=10):
+        super().__init__(parent)
+        self._items = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._layout(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _layout(self, rect, test_only):
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, row_height = eff.x(), eff.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + self._spacing
+            if next_x - self._spacing > eff.right() and row_height > 0:
+                x = eff.x()
+                y = y + row_height + self._spacing
+                next_x = x + hint.width() + self._spacing
+                row_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            row_height = max(row_height, hint.height())
+        return y + row_height - rect.y() + m.bottom()
+
+
 class StorageCard(Card):
     def __init__(self):
         super().__init__()
@@ -1184,9 +1248,7 @@ class StorageCard(Card):
         subtitle.setObjectName("CardSubtitle")
         self.body(subtitle)
 
-        self.tiles_row = QHBoxLayout()
-        self.tiles_row.setSpacing(10)
-        self.tiles_row.setContentsMargins(0, 0, 0, 0)
+        self.tiles_row = FlowLayout(spacing=10)
         self.body(self.tiles_row)
         self.tiles = []
         self.refresh()
@@ -1232,7 +1294,6 @@ class StorageCard(Card):
         icloud_tile = ICloudTile()
         self.tiles_row.addWidget(icloud_tile)
         self.tiles.append(icloud_tile)
-        self.tiles_row.addStretch()
 
     def open_accounts_dialog(self):
         CloudAccountsDialog(self, on_change=self.refresh).exec()
@@ -2674,7 +2735,8 @@ class BackupTrayIcon(QSystemTrayIcon):
         quit_action.triggered.connect(self._quit)
         self.setContextMenu(menu)
 
-        self.activated.connect(self._activated)
+        # No activated handler: clicking the icon should only open the menu.
+        # "Open" in that menu is the one way to raise the window.
         self.update_status()
         self.show()
 
@@ -2713,19 +2775,12 @@ class BackupTrayIcon(QSystemTrayIcon):
         )
         if answer != QMessageBox.Yes:
             return
-        global _REALLY_QUITTING
-        _REALLY_QUITTING = True
         QApplication.quit()
 
     def _show_window(self):
         self._window.show()
         self._window.raise_()
         self._window.activateWindow()
-
-    def _activated(self, reason):
-        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
-                      QSystemTrayIcon.ActivationReason.DoubleClick):
-            self._show_window()
 
 
 # ----------------------------------------------------------------------------
@@ -2829,32 +2884,6 @@ def _acquire_instance_lock():
         return False
 
 
-class QuitInterceptApp(QApplication):
-    """QApplication that refuses to die on Cmd+Q or the dock's Quit item.
-
-    macOS routes both of those to QEvent.Quit, which Qt would normally honour
-    even with setQuitOnLastWindowClosed(False). We swallow the event and hide
-    the window instead, so the tray icon — and with it the nightly schedule,
-    network trigger and USB trigger — stays alive. Only the tray's own Quit
-    action sets _REALLY_QUITTING and lets the event through.
-    """
-
-    def __init__(self, argv):
-        super().__init__(argv)
-        self._main_window = None
-
-    def set_window(self, win):
-        self._main_window = win
-
-    def event(self, e):
-        if e.type() == QEvent.Quit and not _REALLY_QUITTING:
-            e.ignore()
-            if self._main_window is not None:
-                self._main_window.close()  # routes through MainWindow.closeEvent → hide
-            return True
-        return super().event(e)
-
-
 def main():
     background = "--background" in sys.argv
     if background:
@@ -2876,11 +2905,11 @@ def main():
 
     global _DARK
     _DARK = _system_dark_mode()
-    app = QuitInterceptApp(sys.argv)
-    app.setQuitOnLastWindowClosed(False)  # tray icon keeps the app alive
+    app = QApplication(sys.argv)
+    # Closing the window hides to the tray; Cmd+Q and the dock's Quit still exit.
+    app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
-    app.set_window(win)
     if not background:
         win.show()
     sys.exit(app.exec())
