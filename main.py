@@ -645,47 +645,91 @@ def disk_usage_for(path):
         return None
 
 
+def iter_log_runs(text: str):
+    """Yield (date, start_time, block) for each backup run in one daily log.
+
+    A daily log accumulates: every run that day appends to the same file. So a
+    plain search over the whole file always describes the day's FIRST run and
+    never updates as later runs land. Split on the start markers instead and let
+    callers pick the run they mean — almost always the last one.
+    """
+    starts = list(re.finditer(
+        r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\] ===== Backup run started", text))
+    for i, m in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+        yield m.group(1), m.group(2), text[m.start():end]
+
+
+def run_status(block: str) -> str:
+    """OK / ERRORS / — for a single run's block."""
+    if "finished OK" in block:
+        return "OK"
+    if "WITH ERRORS" in block:
+        return "ERRORS"
+    return "—"
+
+
+def run_finished_at(block: str) -> str | None:
+    m = re.search(
+        r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+===== Backup run finished", block)
+    return m.group(1) if m else None
+
+
+def _newest_log_runs():
+    """Runs from the newest log that has any, newest run first."""
+    for log_path in sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True):
+        text = Path(log_path).read_text(errors="replace")
+        runs = list(iter_log_runs(text))
+        if runs:
+            return log_path, list(reversed(runs))
+    return None, []
+
+
 def last_backup_info():
     logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")))
     if not logs:
         return "No backups run yet.", ""
-    latest = logs[-1]
-    text = Path(latest).read_text(errors="replace") if Path(latest).exists() else ""
-    status = "unknown"
-    if "finished OK" in text:
-        status = "OK"
-    elif "WITH ERRORS" in text:
-        status = "ERRORS"
-    match = re.search(r"\[([\d-]{10} [\d:]{8})\]\s+===== Backup run finished", text)
-    timestamp = match.group(1) if match else Path(latest).stem.replace("backup_", "")
-    return f"Last run: {timestamp}  —  {status}", latest
+    log_path, runs = _newest_log_runs()
+    if not runs:
+        latest = logs[-1]
+        stamp = Path(latest).stem.replace("backup_", "")
+        return f"Last run: {stamp}  —  unknown", latest
+    date, started, block = runs[0]
+    # Status comes from this run's block only. Scanning the whole file meant one
+    # early success hid every later failure that day.
+    timestamp = run_finished_at(block) or f"{date} {started}"
+    return f"Last run: {timestamp}  —  {run_status(block)}", log_path
 
 
 def last_backup_age_hours() -> float | None:
     """Hours since the last successful backup finished, or None if no record."""
-    logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")))
-    for log_path in reversed(logs):
+    for log_path in sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True):
         text = Path(log_path).read_text(errors="replace")
-        m = re.search(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+===== Backup run finished OK", text)
-        if m:
+        for _date, _started, block in reversed(list(iter_log_runs(text))):
+            if "finished OK" not in block:
+                continue
+            stamp = run_finished_at(block)
+            if not stamp:
+                continue
             try:
-                t = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
-                return (datetime.now() - t).total_seconds() / 3600
+                t = datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                pass
+                continue
+            return (datetime.now() - t).total_seconds() / 3600
     return None
 
 
 def last_sync_per_folder() -> dict:
-    """Return {folder_name: 'YYYY-MM-DD HH:MM:SS'} from the most recent OK line per folder."""
+    """Return {folder_name: 'YYYY-MM-DD HH:MM:SS'} from each folder's newest OK line."""
     result = {}
     logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True)
     for log_path in logs:
         text = Path(log_path).read_text(errors="replace")
-        for m in re.finditer(r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+OK: (.+)", text):
-            folder = m.group(2).strip()
-            if folder not in result:
-                result[folder] = m.group(1)
+        # Newest run first, so the first time a folder is seen is its latest sync.
+        for _date, _started, block in reversed(list(iter_log_runs(text))):
+            for m in re.finditer(
+                    r"\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s+OK: (.+)", block):
+                result.setdefault(m.group(2).strip(), m.group(1))
         if len(result) >= 50:
             break
     return result
@@ -1744,35 +1788,38 @@ class BackupHistoryDialog(QDialog):
         dlg.exec()
 
     def _parse_runs(self):
-        logs = sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True)[:15]
+        """The last 15 runs, newest first — runs, not days.
+
+        Several backups a day share one log file, so iterating files listed only
+        each day's first run and hid the rest.
+        """
         runs = []
-        for log_path in logs:
+        for log_path in sorted(glob.glob(str(LOG_DIR / "backup_*.log")), reverse=True):
             text = Path(log_path).read_text(errors="replace")
-            sm = re.search(
-                r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\] ===== Backup run started", text)
-            em = re.search(
-                r"\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\] ===== Backup run finished", text)
-            if not sm:
-                continue
-            date, started = sm.group(1), sm.group(2)
-            duration = "—"
-            if em:
-                try:
-                    t0 = datetime.strptime(f"{sm.group(1)} {sm.group(2)}", "%Y-%m-%d %H:%M:%S")
-                    t1 = datetime.strptime(f"{em.group(1)} {em.group(2)}", "%Y-%m-%d %H:%M:%S")
-                    secs = int((t1 - t0).total_seconds())
-                    duration = f"{secs // 60}m {secs % 60}s"
-                except ValueError:
-                    pass
-            size_m = re.search(r"Total transferred file size:\s*([\d,]+)\s*bytes", text)
-            transferred = "—"
-            if size_m:
-                try:
-                    transferred = human_size(int(size_m.group(1).replace(",", "")))
-                except ValueError:
-                    pass
-            status = "OK" if "finished OK" in text else "ERRORS" if "WITH ERRORS" in text else "—"
-            runs.append((date, started, duration, transferred, status, log_path))
+            for date, started, block in reversed(list(iter_log_runs(text))):
+                duration = "—"
+                finished = run_finished_at(block)
+                if finished:
+                    try:
+                        t0 = datetime.strptime(f"{date} {started}", "%Y-%m-%d %H:%M:%S")
+                        t1 = datetime.strptime(finished, "%Y-%m-%d %H:%M:%S")
+                        secs = int((t1 - t0).total_seconds())
+                        duration = f"{secs // 60}m {secs % 60}s"
+                    except ValueError:
+                        pass
+                # One rsync invocation per folder, so a run has several totals.
+                total = 0
+                for m in re.finditer(
+                        r"Total transferred file size:\s*([\d,]+)\s*bytes", block):
+                    try:
+                        total += int(m.group(1).replace(",", ""))
+                    except ValueError:
+                        pass
+                transferred = human_size(total) if total else "—"
+                runs.append((date, started, duration, transferred,
+                             run_status(block), log_path))
+                if len(runs) >= 15:
+                    return runs
         return runs
 
 
