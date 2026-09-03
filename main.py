@@ -12,6 +12,8 @@ Run:  python main.py   (needs PySide6 — see requirements.txt)
 """
 
 import sys
+import ctypes
+import ctypes.util
 import fcntl
 import glob
 import json
@@ -55,6 +57,53 @@ _REALLY_QUITTING: bool = False
 # Set by main() before creating QApplication; used by widgets that need to
 # apply different inline styles for dark/light mode.
 _DARK: bool = False
+
+
+# ----------------------------------------------------------------------------
+# Dock icon visibility
+#
+# Hiding the window is not enough to make a refused Quit feel like a quit — the
+# dock icon stays behind. macOS controls that with the app's activation policy,
+# which Qt does not expose, so call -[NSApplication setActivationPolicy:]
+# through the Objective-C runtime. Accessory keeps the menu bar icon (an
+# NSStatusItem) while dropping the dock tile and the app menu.
+# ----------------------------------------------------------------------------
+_NS_ACTIVATION_POLICY_REGULAR = 0
+_NS_ACTIVATION_POLICY_ACCESSORY = 1
+
+try:
+    _objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+    _objc.objc_getClass.restype = ctypes.c_void_p
+    _objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    _objc.sel_registerName.restype = ctypes.c_void_p
+    _objc.sel_registerName.argtypes = [ctypes.c_char_p]
+except Exception:
+    _objc = None
+
+
+def _set_dock_icon_visible(visible: bool) -> bool:
+    """Show or hide the dock tile. Returns True if the policy was applied."""
+    if _objc is None:
+        return False
+    try:
+        # objc_msgSend needs a distinct prototype per signature, so cast twice.
+        send_id = ctypes.cast(
+            _objc.objc_msgSend,
+            ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p))
+        send_policy = ctypes.cast(
+            _objc.objc_msgSend,
+            ctypes.CFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+                             ctypes.c_long))
+        ns_app = send_id(_objc.objc_getClass(b"NSApplication"),
+                         _objc.sel_registerName(b"sharedApplication"))
+        if not ns_app:
+            return False
+        policy = (_NS_ACTIVATION_POLICY_REGULAR if visible
+                  else _NS_ACTIVATION_POLICY_ACCESSORY)
+        return bool(send_policy(
+            ns_app, _objc.sel_registerName(b"setActivationPolicy:"), policy))
+    except Exception:
+        return False
 
 # ----------------------------------------------------------------------------
 # Paths / config
@@ -2786,6 +2835,9 @@ class BackupTrayIcon(QSystemTrayIcon):
         os._exit(0)
 
     def _show_window(self):
+        # Back into the dock first: a Regular app can take focus, an Accessory
+        # one cannot, so raise/activate below would otherwise do nothing.
+        _set_dock_icon_visible(True)
         self._window.show()
         self._window.raise_()
         self._window.activateWindow()
@@ -2914,6 +2966,9 @@ class QuitInterceptApp(QApplication):
             e.ignore()
             if self._main_window is not None:
                 self._main_window.close()  # closeEvent ignores it and hides
+                # Drop out of the dock as well, so this reads as a real quit.
+                # The menu bar icon is an NSStatusItem and survives the switch.
+                _set_dock_icon_visible(False)
                 # Say where the app went and how to leave for real — otherwise a
                 # refused Quit is indistinguishable from the app being stuck.
                 self._main_window.tray.showMessage(

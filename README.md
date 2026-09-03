@@ -105,10 +105,26 @@ Quick launchers and helpers:
 ---
 
 ### Menu-bar icon
-Tooltip shows last backup timestamp. Right-click for **Show**, **Run Backup Now**,
-and **Quit**. The icon shows an orange dot overlay when the backup is overdue. When
-"Hide to menu bar on close" is enabled, **Quit** asks for confirmation so overnight
-backups can't be killed accidentally.
+Tooltip shows the last backup timestamp; the icon gains an orange dot when a backup
+is overdue. Clicking the icon opens the menu and nothing else — it never raises the
+window on its own.
+
+| Item | Effect |
+|---|---|
+| **Open** | Shows the window and returns the app to the dock |
+| **Dry run** | Preview run, window opens so you can watch the log |
+| **Sync now** | Real backup, window opens so you can watch the log |
+| **Quit** | The one true exit — fully terminates the app |
+
+**Quitting keeps the menu-bar icon.** Dock → Quit, ⌘Q, and closing the window all
+hide the window *and drop the app out of the dock*, but leave it running in the menu
+bar so the nightly schedule, network trigger and USB trigger keep working. macOS calls
+this an accessory app; the app switches its own activation policy at runtime.
+A notification says so, since a Quit that visibly does nothing looks like a hang.
+
+To exit completely, use **Quit** in this menu. That is also the only way back to a
+visible app once it is accessory-only — reopening the `.app` will just report that an
+instance is already running.
 
 ---
 
@@ -273,10 +289,43 @@ tokens, quota history — is separate, and lives outside this folder. See
 
 ---
 
+## Verifying a backup
+
+`verify.py` spot-checks that the backup really holds what the source does, without
+involving the Drive API: the destination is a local Google Drive folder, so a plain
+`stat()` comparison is enough. It reproduces rsync's own rules rather than inventing
+failures against them — the same `gdrive_backup_excludes.txt` patterns are honoured
+(an excluded file is not missing), a destination newer than the source is left alone
+deliberately (`--update`), and timestamps only compare to the nearest two seconds
+(`--modify-window=2`, `MTIME_TOLERANCE_S`). It samples up to 300 files per folder
+by default and checks size and mtime only — never a read, since hashing would drag
+a Drive-streamed file back down over the network. A finding is one of **missing**,
+**wrong size**, **stale** (changed since the last backup — not a fault), or
+**unreadable** (a permissions problem, not a backup problem).
+
+**Not wired into the app yet.** `verify()` is a tested, working library function —
+covered by `tests/test_verify.py` — but nothing in `main.py` calls it and there is
+no button or CLI flag that runs it today. Run it from a Python shell (`import verify`)
+or see the backlog below.
+
+## Tests
+
+```bash
+pytest
+```
+
+`tests/test_verify.py` covers the comparison rules above against a scratch
+source/dest tree (`tmp_path`), and `tests/test_overdue_cooldown.py` covers the
+overdue-notification cooldown persisted to `state.json` — both patch the real
+state file and secrets directory out so a test run never touches live app data.
+
 ## Backlog
 - **Developer ID code signing** — eliminates the need to re-grant FDA after each rebuild
   and would let launchd launch the app as a reliable fallback. Requires a paid Apple
   Developer account ($99/yr).
+- **Wire up `verify.py`** — the spot-check logic and its tests are done, but nothing
+  calls it. A **🔍 Verify backup** button (Google Drive Backup card, or Tools & Links)
+  or a `--verify` CLI flag would make it reachable.
 
 ## Suggestions & roadmap
 See [SUGGESTIONS.md](SUGGESTIONS.md).
