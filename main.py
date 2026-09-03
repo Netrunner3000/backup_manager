@@ -47,6 +47,11 @@ from PySide6.QtWidgets import (
 
 import cloud_quota
 
+# Set only by the tray's Quit action. Every other quit path — Cmd+Q, the dock's
+# Quit item, closing the window — is turned into "hide to the menu bar" so the
+# nightly schedule, network trigger and USB trigger keep running.
+_REALLY_QUITTING: bool = False
+
 # Set by main() before creating QApplication; used by widgets that need to
 # apply different inline styles for dark/light mode.
 _DARK: bool = False
@@ -2884,6 +2889,32 @@ def _acquire_instance_lock():
         return False
 
 
+class QuitInterceptApp(QApplication):
+    """QApplication that stays alive in the menu bar when the user quits.
+
+    macOS routes both Cmd+Q and the dock's right-click -> Quit to QEvent.Quit,
+    which Qt honours even with setQuitOnLastWindowClosed(False). Swallowing it
+    keeps the tray icon — and with it the nightly schedule, network trigger and
+    USB trigger — running. The tray's own Quit sets _REALLY_QUITTING first, so
+    that one path exits for real.
+    """
+
+    def __init__(self, argv):
+        super().__init__(argv)
+        self._main_window = None
+
+    def set_window(self, win):
+        self._main_window = win
+
+    def event(self, e):
+        if e.type() == QEvent.Quit and not _REALLY_QUITTING:
+            e.ignore()
+            if self._main_window is not None:
+                self._main_window.close()  # closeEvent ignores it and hides
+            return True
+        return super().event(e)
+
+
 def main():
     background = "--background" in sys.argv
     if background:
@@ -2905,11 +2936,11 @@ def main():
 
     global _DARK
     _DARK = _system_dark_mode()
-    app = QApplication(sys.argv)
-    # Closing the window hides to the tray; Cmd+Q and the dock's Quit still exit.
+    app = QuitInterceptApp(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setStyleSheet(build_app_style(_DARK))
     win = MainWindow()
+    app.set_window(win)
     if not background:
         win.show()
     sys.exit(app.exec())
