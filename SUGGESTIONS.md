@@ -9,7 +9,6 @@ Status: `IDEA` · `CONSIDERING` · `PLANNED` · `DONE` · `REJECTED`
 | # | Suggestion | Category | Effort | Status |
 |---|---|---|---|---|
 | 1 | Developer ID code signing — removes the Full Disk Access re-grant after every rebuild and makes the launchd fallback reliable. Needs a paid Apple Developer account; cannot be done in code alone. | infra | M | BLOCKED |
-| 2 | Backup verification spot-check against remote checksums | feature | L | DEFERRED |
 | 3 | Storage quota trend chart | performance | L | DONE |
 | 4 | Restore helper — pick a dated log, restore what that run moved | feature | XL | DEFERRED |
 | 5 | S3 / Backblaze B2 as a second destination | feature | XL | DEFERRED |
@@ -35,6 +34,7 @@ Status: `IDEA` · `CONSIDERING` · `PLANNED` · `DONE` · `REJECTED`
 | Wake Mac time tracks the backup time setting | Aug 2026 |
 | Quota trend sparkline in storage tiles (QPainter, no extra deps) | Aug 2026 |
 | Webhook / ntfy / Slack POST on backup failure (configurable in Settings) | Aug 2026 |
+| Backup verification spot-check — `verify.py` compares source against the backup by size/mtime (not checksums: nothing needs a read since Drive streams the destination on demand), honouring rsync's excludes, `--update`, and `--modify-window=2`. Tested; not yet reachable from the app (no button or flag calls it) | Aug 2026 |
 | Storage tiles (Local, Google Drive, Dropbox) with progress bars | v1 |
 | Cloud accounts OAuth quota dialog (Google + Dropbox) | v1 |
 | Nightly backup timer in-app, replacing launchd | v1 |
