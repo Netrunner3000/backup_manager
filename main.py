@@ -2771,16 +2771,19 @@ class BackupTrayIcon(QSystemTrayIcon):
         self._status_action.setText(short)
 
     def _quit(self):
-        # The one real exit. No confirmation dialog here: with the window hidden
-        # a parentless modal never comes to front, which made the app look
-        # unquittable. Save state, then go.
+        # The one real exit. No confirmation dialog: with the window hidden a
+        # parentless modal never comes to front, which made this path look dead.
         global _REALLY_QUITTING
         _REALLY_QUITTING = True
         try:
             self._window.backup_card.save_log_scroll()
         except Exception:
             pass
-        QApplication.quit()
+        # Hard exit rather than QApplication.quit(). This is the only path out
+        # of the app, and half a dozen QThreads (iCloud `du -sk`, folder sizing,
+        # Lab Health scan) may be mid-run; an exit that can be delayed by any of
+        # them is not worth the risk here. State is saved, nothing to unwind.
+        os._exit(0)
 
     def _show_window(self):
         self._window.show()
@@ -2911,6 +2914,14 @@ class QuitInterceptApp(QApplication):
             e.ignore()
             if self._main_window is not None:
                 self._main_window.close()  # closeEvent ignores it and hides
+                # Say where the app went and how to leave for real — otherwise a
+                # refused Quit is indistinguishable from the app being stuck.
+                self._main_window.tray.showMessage(
+                    "Still running in the menu bar",
+                    "Backups keep running. To exit fully: menu bar icon → Quit.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    4000,
+                )
             return True
         return super().event(e)
 
