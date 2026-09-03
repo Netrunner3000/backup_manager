@@ -2771,15 +2771,15 @@ class BackupTrayIcon(QSystemTrayIcon):
         self._status_action.setText(short)
 
     def _quit(self):
-        answer = QMessageBox.question(
-            None, "Quit Backup Control Center",
-            "Quit the app?\n\nThe nightly backup, network trigger and USB trigger "
-            "will not run while it is closed.",
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-        if answer != QMessageBox.Yes:
-            return
+        # The one real exit. No confirmation dialog here: with the window hidden
+        # a parentless modal never comes to front, which made the app look
+        # unquittable. Save state, then go.
+        global _REALLY_QUITTING
+        _REALLY_QUITTING = True
+        try:
+            self._window.backup_card.save_log_scroll()
+        except Exception:
+            pass
         QApplication.quit()
 
     def _show_window(self):
