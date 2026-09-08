@@ -48,6 +48,7 @@ Status: `IDEA` · `CONSIDERING` · `PLANNED` · `DONE` · `REJECTED`
 | Backup destination health check before a run | Aug 2026 |
 | iCloud local cache tile and Time Machine status card | Aug 2026 |
 | `rsync --stats` and `--itemize-changes` on every run | Aug 2026 |
+| Per-run (not per-day) backup history — multiple runs sharing one daily log were collapsing to the day's first run's status everywhere it was read | Sep 2026 |
 
 ## Rejected
 
