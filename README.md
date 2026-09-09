@@ -123,9 +123,11 @@ bar so the nightly schedule, network trigger and USB trigger keep working. macOS
 this an accessory app; the app switches its own activation policy at runtime.
 A notification says so, since a Quit that visibly does nothing looks like a hang.
 
-To exit completely, use **Quit** in this menu. That is also the only way back to a
-visible app once it is accessory-only — reopening the `.app` will just report that an
-instance is already running.
+To exit completely, use **Quit** in this menu.
+
+**Reopening a hidden app works normally.** Launching it again — from Lab Hub, Spotlight,
+the Finder, or `open -a` — brings the running copy back rather than starting a second
+one or doing nothing. See Single-instance guard below.
 
 ---
 
@@ -213,10 +215,19 @@ fallback but the reliable path on macOS 26 is the in-app timer.
 ---
 
 ## Single-instance guard
-A second GUI instance shows a native alert and brings the existing window to front.
-Does not affect `--run-backup` headless mode. Launching with `--background` skips the
-alert (exits quietly if another instance is already running) and opens without
-maximizing the window — for starting the app unobtrusively without stealing focus.
+An `flock` on `gui.lock` keeps exactly one GUI instance alive. A second launch writes
+a `show_request` file into the settings directory and exits immediately; the running
+copy watches that directory, restores its dock tile and raises its window. So launching
+the app while it is already running just brings it back, whether it was merely behind
+another window or hidden in the menu bar.
+
+The signal exists because macOS `activate` has no effect on an accessory app, which is
+what this becomes after a Quit — the earlier version showed an "already open" alert and
+then failed to show anything, which read as the app refusing to launch.
+
+Does not affect `--run-backup` headless mode. Launching with `--background` exits
+quietly when another instance is running, and otherwise starts without showing the
+window — for starting the app unobtrusively without stealing focus.
 
 ---
 

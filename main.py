@@ -2825,8 +2825,32 @@ class MainWindow(QMainWindow):
 
         self.backup_card._finished = _patched_finished
 
+        # Watch for a second launch asking us to un-hide. The directory is
+        # watched rather than the file, because a watch on a file that gets
+        # created and deleted repeatedly does not survive the delete.
+        try:
+            cloud_quota.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+            _SHOW_REQUEST_FILE.unlink(missing_ok=True)  # ignore a stale request
+            self._show_watcher = QFileSystemWatcher([str(cloud_quota.SECRETS_DIR)], self)
+            self._show_watcher.directoryChanged.connect(self._on_show_requested)
+        except OSError:
+            self._show_watcher = None
+
         # Live dark mode: re-theme when system appearance changes.
         QApplication.instance().paletteChanged.connect(self._on_palette_changed)
+
+    def _on_show_requested(self, _path):
+        """A second launch asked us to come back. Fires on any write in the
+        settings dir (state.json included), so the request file gates it."""
+        if not _SHOW_REQUEST_FILE.exists():
+            return
+        try:
+            _SHOW_REQUEST_FILE.unlink()
+        except OSError:
+            pass
+        # Reuses the tray's Open, which restores the dock tile before raising —
+        # an accessory app cannot take focus, so the order matters.
+        self.tray._show_window()
 
     def _open_settings(self):
         dlg = SettingsDialog(self)
@@ -3081,6 +3105,13 @@ class SettingsDialog(QDialog):
 _INSTANCE_LOCK_FILE = cloud_quota.SECRETS_DIR / "gui.lock"
 _instance_lock_fd = None  # kept open so the OS holds the lock for our lifetime
 
+# How a second launch reaches the running copy. Quitting drops the app to
+# accessory (no dock tile, window hidden), and macOS "activate" does nothing to
+# an app in that state — so relaunching from Lab Hub, Spotlight or the Finder
+# looked like nothing happened. The second instance drops this file and exits;
+# the running one is watching for it and un-hides.
+_SHOW_REQUEST_FILE = cloud_quota.SECRETS_DIR / "show_request"
+
 
 def _acquire_instance_lock():
     """Grab an exclusive flock on a lock file. Returns True for the first instance."""
@@ -3141,16 +3172,21 @@ def main():
     if not _acquire_instance_lock():
         if background:
             sys.exit(0)
-        # Show a native alert, then bring the existing window to front.
-        subprocess.run(
-            ["osascript", "-e",
-             'display alert "Backup Control Center is already open." '
-             'message "Only one instance can run at a time." '
-             'buttons {"OK"} default button "OK" '
-             'giving up after 8\n'
-             'tell application "Backup Control Center" to activate'],
-            check=False,
-        )
+        # Ask the running copy to show itself, then get out of the way. No alert:
+        # launching the app should just bring it up, and the old alert fired even
+        # when the running copy was invisible, which read as "it won't open".
+        try:
+            cloud_quota.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+            _SHOW_REQUEST_FILE.write_text(datetime.now().isoformat())
+        except OSError:
+            # Signalling failed, so say something rather than exiting silently.
+            subprocess.run(
+                ["osascript", "-e",
+                 'display alert "Backup Control Center is already running." '
+                 'message "Use its menu bar icon to open the window." '
+                 'buttons {"OK"} default button "OK" giving up after 8'],
+                check=False,
+            )
         sys.exit(0)
 
     global _DARK
