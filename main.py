@@ -3105,11 +3105,20 @@ class SettingsDialog(QDialog):
 _INSTANCE_LOCK_FILE = cloud_quota.SECRETS_DIR / "gui.lock"
 _instance_lock_fd = None  # kept open so the OS holds the lock for our lifetime
 
-# How a second launch reaches the running copy. Quitting drops the app to
-# accessory (no dock tile, window hidden), and macOS "activate" does nothing to
-# an app in that state — so relaunching from Lab Hub, Spotlight or the Finder
-# looked like nothing happened. The second instance drops this file and exits;
-# the running one is watching for it and un-hides.
+# How a second launch reaches the running copy — one of two ways, because macOS
+# does not behave consistently here:
+#
+#   * While the app is ACCESSORY (after a Quit), LaunchServices does start a
+#     second process. It hits the lock, drops this file, and exits; the running
+#     copy is watching for it and un-hides.
+#   * While the app is a normal FOREGROUND app with a hidden window (what
+#     --background produces), LaunchServices starts nothing at all. It sends a
+#     reopen Apple Event to the running instance instead, so no second process
+#     exists to write anything — that arrives as QEvent.ApplicationActivate and
+#     is handled in QuitInterceptApp.
+#
+# Missing the second case is why launching from Lab Hub took focus, showed the
+# app in the menu bar, and never put a window on screen.
 _SHOW_REQUEST_FILE = cloud_quota.SECRETS_DIR / "show_request"
 
 
@@ -3141,11 +3150,28 @@ class QuitInterceptApp(QApplication):
     def __init__(self, argv):
         super().__init__(argv)
         self._main_window = None
+        # Activation events fire while the app is still coming up. Honouring
+        # those would pop a window open in --background mode, which exists
+        # precisely to start without one, so ignore anything in the first
+        # couple of seconds.
+        self._accepts_reopen = False
+        QTimer.singleShot(2500, lambda: setattr(self, "_accepts_reopen", True))
 
     def set_window(self, win):
         self._main_window = win
 
     def event(self, e):
+        # Reopen: launching an already-running foreground app starts no second
+        # process, so nothing can signal us through the show-request file — this
+        # event is the only notice we get. Only act when there is no window up,
+        # so ordinary re-focus (⌘-Tab, clicking the dock tile of a visible app)
+        # is left alone.
+        if (e.type() == QEvent.ApplicationActivate
+                and self._accepts_reopen
+                and self._main_window is not None
+                and not self._main_window.isVisible()):
+            self._main_window.tray._show_window()
+            return True
         if e.type() == QEvent.Quit and not _REALLY_QUITTING:
             e.ignore()
             if self._main_window is not None:
