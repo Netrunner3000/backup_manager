@@ -1870,6 +1870,10 @@ class BackupStatusCard(Card):
         self.run_btn.clicked.connect(self.run_backup)
         self.dry_btn = secondary_button("⚟  Dry run")
         self.dry_btn.clicked.connect(self.run_dry_run)
+        self.preview_del_btn = secondary_button("🗑  Preview deletions")
+        self.preview_del_btn.setToolTip(
+            "List what mirroring would remove from Google Drive. Changes nothing.")
+        self.preview_del_btn.clicked.connect(self.run_delete_preview)
         self.pause_btn = secondary_button("⏸  Pause")
         self.pause_btn.clicked.connect(self.toggle_pause)
         self.pause_btn.setEnabled(False)
@@ -1881,6 +1885,7 @@ class BackupStatusCard(Card):
         self.history_btn.clicked.connect(lambda: BackupHistoryDialog(self).exec())
         runrow.addWidget(self.run_btn)
         runrow.addWidget(self.dry_btn)
+        runrow.addWidget(self.preview_del_btn)
         runrow.addWidget(self.pause_btn)
         runrow.addWidget(self.stop_btn)
         runrow.addStretch()
@@ -2113,6 +2118,13 @@ class BackupStatusCard(Card):
         self._dry_run = False
         self.log.clear()
         self.proc = QProcess(self)
+        if _load_state().get("mirror_mode", False):
+            env = QProcessEnvironment.systemEnvironment()
+            env.insert("MIRROR", "1")
+            self.proc.setProcessEnvironment(env)
+            self.log.insertPlainText(
+                "=== MIRROR MODE ON — files deleted locally are removed from Drive "
+                "(archived under _deleted/) ===\n\n")
         self.proc.setProcessChannelMode(QProcess.MergedChannels)
         self.proc.readyReadStandardOutput.connect(self._read_output)
         self.proc.finished.connect(self._finished)
@@ -2142,6 +2154,66 @@ class BackupStatusCard(Card):
         self.pause_btn.setEnabled(True)
         self.stop_btn.setEnabled(True)
         self.proc.start("/bin/bash", [str(SCRIPT)])
+
+    def run_delete_preview(self):
+        """List what mirror mode would delete from Drive. Changes nothing.
+
+        DRY_RUN=1 MIRROR=1 is the script's own preview combination, so this
+        shows exactly what enabling mirroring would do, not an approximation.
+        """
+        if self.proc is not None:
+            QMessageBox.information(self, "Busy",
+                                    "Stop the running backup before previewing deletions.")
+            return
+        if not DEST_ROOT.exists():
+            self.status_lbl.setText("⚠ Google Drive not mounted — cannot preview.")
+            return
+        self._dry_run = True  # writes to dryrun_*.log, so it can't look like a real run
+        self.log.clear()
+        self.log.insertPlainText(
+            "=== DELETION PREVIEW — nothing will be changed ===\n"
+            "Lines marked '*deleting' are what mirror mode would remove from Drive.\n\n")
+        self.proc = QProcess(self)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("DRY_RUN", "1")
+        env.insert("MIRROR", "1")
+        self.proc.setProcessEnvironment(env)
+        self.proc.setProcessChannelMode(QProcess.MergedChannels)
+        self.proc.readyReadStandardOutput.connect(self._read_output)
+        self.proc.finished.connect(self._delete_preview_finished)
+        self.run_btn.setEnabled(False)
+        self.dry_btn.setEnabled(False)
+        self.preview_del_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
+        self.stop_btn.setEnabled(True)
+        self.proc.start("/bin/bash", [str(SCRIPT)])
+
+    def _delete_preview_finished(self):
+        # rsync --itemize-changes marks removals "*deleting   <path>", with the
+        # asterisk; a plain "deleting" prefix never matches. Paths ending in "/"
+        # are the directories left behind once their contents go, counted apart
+        # so the headline number is files.
+        files = dirs = 0
+        for ln in self.log.toPlainText().splitlines():
+            s = ln.strip()
+            if not s.startswith("*deleting"):
+                continue
+            path = s[len("*deleting"):].strip()
+            if path.endswith("/"):
+                dirs += 1
+            else:
+                files += 1
+        self._finished()
+        self.preview_del_btn.setEnabled(True)
+        if files or dirs:
+            extra = f" and {dirs} empty folder(s)" if dirs else ""
+            self.log.appendPlainText(
+                f"\n=== {files} file(s){extra} would be removed from Drive.\n"
+                "Copies would be kept under Backups/MacBook/_deleted/<date>/.\n"
+                "Turn on mirror mode in Settings to apply this. ===")
+        else:
+            self.log.appendPlainText(
+                "\n=== Nothing to delete — the backup already matches your Mac. ===")
 
     def toggle_pause(self):
         if self.proc is None:
@@ -2202,6 +2274,7 @@ class BackupStatusCard(Card):
         self._paused = False
         self.run_btn.setEnabled(True)
         self.dry_btn.setEnabled(True)
+        self.preview_del_btn.setEnabled(True)
         self.pause_btn.setEnabled(False)
         self.pause_btn.setText("⏸  Pause")
         self.stop_btn.setEnabled(False)
@@ -2936,6 +3009,20 @@ class SettingsDialog(QDialog):
         time_note.setObjectName("CardSubtitle")
         layout.addWidget(time_note)
 
+        self._mirror_chk = QCheckBox("Mirror mode — delete from Drive what you delete locally")
+        self._mirror_chk.setChecked(state.get("mirror_mode", False))
+        layout.addWidget(self._mirror_chk)
+
+        mirror_note = QLabel(
+            "Off by default, so the backup only ever grows and old files linger. "
+            "On, each run removes backed-up files that no longer exist on this Mac — "
+            "they are moved to Backups/MacBook/_deleted/&lt;date&gt;/ rather than destroyed, "
+            "so mistakes stay recoverable. Run <b>Preview deletions</b> first."
+        )
+        mirror_note.setWordWrap(True)
+        mirror_note.setObjectName("CardSubtitle")
+        layout.addWidget(mirror_note)
+
         layout.addWidget(QLabel("Webhook URL on failure (optional):"))
         self._webhook_edit = QLineEdit()
         self._webhook_edit.setPlaceholderText("https://ntfy.sh/your-topic  or  https://hooks.slack.com/…")
@@ -2964,10 +3051,29 @@ class SettingsDialog(QDialog):
 
     def _save(self):
         state = _load_state()
+        # Turning mirroring on makes every later run destructive, so confirm it
+        # here rather than letting it ride along with the other settings.
+        turning_on = self._mirror_chk.isChecked() and not state.get("mirror_mode", False)
+        if turning_on:
+            answer = QMessageBox.warning(
+                self, "Enable mirror mode?",
+                "From the next backup on, deleting a file on this Mac will also "
+                "remove it from Google Drive.\n\n"
+                "Deleted copies are kept in Backups/MacBook/_deleted/<date>/, so "
+                "this is recoverable — but only for as long as you keep those "
+                "folders.\n\n"
+                "Have you run Preview deletions and checked the list?",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer != QMessageBox.Yes:
+                self._mirror_chk.setChecked(False)
+                return
         state["hide_on_close"] = self._hide_chk.isChecked()
         state["backup_hour"] = self._hour_spin.value()
         state["backup_minute"] = self._minute_spin.value()
         state["webhook_url"] = self._webhook_edit.text().strip()
+        state["mirror_mode"] = self._mirror_chk.isChecked()
         _save_state(state)
         self.accept()
 

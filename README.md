@@ -39,6 +39,7 @@ last 60 lines of the most recent run so status is visible without triggering a n
 | **▶ Run backup now** | Starts the rsync backup immediately (aborts with a warning if Google Drive is not mounted) |
 | **⏸ Pause / ▶ Resume** | Suspends or resumes the running rsync process (SIGSTOP/SIGCONT) — useful when bandwidth is needed mid-backup |
 | **⚟ Dry run** | Previews what rsync would copy — no files changed; writes to `dryrun_*.log` so it never confuses the auto-backup detector |
+| **🗑 Preview deletions** | Lists what mirror mode would remove from Drive, and changes nothing. Run this before turning mirroring on |
 | **📋 History** | Last 15 runs: date, start time, duration, bytes transferred, colour-coded status, and a **📄 View log** button for the selected row |
 | **■ Stop** | Kills the running backup or dry run |
 
@@ -141,6 +142,33 @@ without touching system settings.
 | **Hide to menu bar on close** | Closing the window hides the app instead of quitting; use Quit from the menu-bar icon to fully exit |
 | **Backup time** | Hour and minute for the nightly schedule (default 03:30). The Wake Mac toggle sets a `pmset` wake 5 minutes before this time. |
 | **Webhook URL on failure** | A URL to POST to when a backup finishes with errors. Works with ntfy, Slack incoming webhooks, Pushover, or any JSON-accepting endpoint. Body: `{"text": "…", "message": "…"}`. Leave blank to disable. |
+| **Mirror mode** | Off by default. On, each run removes backed-up files that no longer exist locally. Enabling it asks for confirmation. See below. |
+
+---
+
+### Mirroring — removing outdated data
+By default the backup only ever **grows**: delete a file on the Mac and its copy stays
+on Drive forever. That is deliberate (it doubles as accidental-deletion recovery), but
+it means the backup drifts from the Mac over time.
+
+Mirror mode fixes the drift without the one thing you should not do — wiping the Drive
+copy and re-uploading. A wipe destroys your only offsite copy for the hours it takes
+~26,000 files to re-upload, and the drift starts again immediately afterwards.
+
+**Deletions are archived, not destroyed.** Removed files move to
+`Backups/MacBook/_deleted/<date>/<folder>/`, which sits beside `Documents` rather than
+inside it, so rsync never walks its own archive. Prune those dated folders occasionally,
+or they become the thing that grows forever instead.
+
+1. **🗑 Preview deletions** — shows every file mirroring would remove. Changes nothing.
+2. If the list looks right, enable **Mirror mode** in ⚙ Settings.
+
+From the command line the same two steps are:
+
+```bash
+DRY_RUN=1 MIRROR=1 ~/Documents/lab/_Admin/backup/backup_to_gdrive.sh   # preview
+MIRROR=1 ~/Documents/lab/_Admin/backup/backup_to_gdrive.sh             # apply
+```
 
 ---
 

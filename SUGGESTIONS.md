@@ -34,6 +34,7 @@ Status: `IDEA` · `CONSIDERING` · `PLANNED` · `DONE` · `REJECTED`
 | Wake Mac time tracks the backup time setting | Aug 2026 |
 | Quota trend sparkline in storage tiles (QPainter, no extra deps) | Aug 2026 |
 | Webhook / ntfy / Slack POST on backup failure (configurable in Settings) | Aug 2026 |
+| Mirror mode (`MIRROR=1`) plus a "Preview deletions" button — the backup can finally drop data deleted locally, with removals archived to `_deleted/<date>/` instead of destroyed | Sep 2026 |
 | Backup verification spot-check — `verify.py` compares source against the backup by size/mtime (not checksums: nothing needs a read since Drive streams the destination on demand), honouring rsync's excludes, `--update`, and `--modify-window=2`. Tested; not yet reachable from the app (no button or flag calls it) | Aug 2026 |
 | Storage tiles (Local, Google Drive, Dropbox) with progress bars | v1 |
 | Cloud accounts OAuth quota dialog (Google + Dropbox) | v1 |
