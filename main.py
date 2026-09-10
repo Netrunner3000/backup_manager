@@ -2877,7 +2877,22 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.backup_card.save_log_scroll()
         event.ignore()
+        if self.isFullScreen():
+            # Hiding a window that owns a macOS fullscreen Space leaves the Space
+            # behind with nothing drawn in it — a black screen the user has to
+            # escape by hand. Leave fullscreen first and hide once the (animated)
+            # transition has finished; hiding mid-animation strands it just the
+            # same.
+            self.showNormal()
+            QTimer.singleShot(750, self._hide_to_tray)
+        else:
+            self._hide_to_tray()
+
+    def _hide_to_tray(self):
         self.hide()
+        # Drop the dock tile here rather than at the call sites, so it happens
+        # after any fullscreen exit has completed and every hide path matches.
+        _set_dock_icon_visible(False)
         if _load_state().get("hide_on_close", False):
             self.tray.showMessage(
                 "Backup Control Center",
@@ -2982,6 +2997,9 @@ class BackupTrayIcon(QSystemTrayIcon):
         # Back into the dock first: a Regular app can take focus, an Accessory
         # one cannot, so raise/activate below would otherwise do nothing.
         _set_dock_icon_visible(True)
+        if self._window.isMinimized():
+            self._window.setWindowState(
+                self._window.windowState() & ~Qt.WindowMinimized)
         self._window.show()
         self._window.raise_()
         self._window.activateWindow()
@@ -3175,10 +3193,9 @@ class QuitInterceptApp(QApplication):
         if e.type() == QEvent.Quit and not _REALLY_QUITTING:
             e.ignore()
             if self._main_window is not None:
-                self._main_window.close()  # closeEvent ignores it and hides
-                # Drop out of the dock as well, so this reads as a real quit.
-                # The menu bar icon is an NSStatusItem and survives the switch.
-                _set_dock_icon_visible(False)
+                # closeEvent ignores it, leaves fullscreen if needed, then hides
+                # and drops the dock tile once the transition is done.
+                self._main_window.close()
                 # Say where the app went and how to leave for real — otherwise a
                 # refused Quit is indistinguishable from the app being stuck.
                 self._main_window.tray.showMessage(
