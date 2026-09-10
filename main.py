@@ -120,8 +120,13 @@ PLIST_DST = HOME / "Library" / "LaunchAgents" / "com.andreas.gdrive-backup.plist
 LAUNCHD_LABEL = "com.andreas.gdrive-backup"
 CLOUD_DIR = HOME / "Library" / "CloudStorage"
 ICLOUD_DIR = HOME / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
-DEST_ROOT = (CLOUD_DIR / "GoogleDrive-andreas.seel86@gmail.com" /
-             "My Drive" / "Backups" / "MacBook" / "Documents")
+# The mount itself. Pre-flight checks test THIS, not DEST_ROOT: the destination
+# is created by the backup script's mkdir -p, so a missing one is normal on a
+# first run or after the Drive copy is cleared out. Testing DEST_ROOT reported
+# "Google Drive not mounted" for a perfectly healthy mount and blocked the very
+# run that would have recreated the folder.
+DRIVE_ROOT = CLOUD_DIR / "GoogleDrive-andreas.seel86@gmail.com" / "My Drive"
+DEST_ROOT = DRIVE_ROOT / "Backups" / "MacBook" / "Documents"
 LAB_ACTIVE = DOCS / "lab" / "active"
 # Same disposable-junk names as gdrive_backup_excludes.txt — if it's not worth
 # backing up, it's not worth keeping locally once the project is idle either.
@@ -2024,7 +2029,7 @@ class BackupStatusCard(Card):
         if self.proc is not None:
             QMessageBox.information(self, "Busy", "Stop the running backup before starting a new one.")
             return
-        if not DEST_ROOT.exists():
+        if not DRIVE_ROOT.exists():
             self.status_lbl.setText("⚠ Google Drive not mounted — cannot run backup.")
             return
         src = str(DOCS / folder) + "/"
@@ -2112,7 +2117,7 @@ class BackupStatusCard(Card):
     def run_backup(self):
         if self.proc is not None:
             return
-        if not DEST_ROOT.exists():
+        if not DRIVE_ROOT.exists():
             self.status_lbl.setText("⚠ Google Drive not mounted — cannot run backup.")
             return
         self._dry_run = False
@@ -2165,7 +2170,7 @@ class BackupStatusCard(Card):
             QMessageBox.information(self, "Busy",
                                     "Stop the running backup before previewing deletions.")
             return
-        if not DEST_ROOT.exists():
+        if not DRIVE_ROOT.exists():
             self.status_lbl.setText("⚠ Google Drive not mounted — cannot preview.")
             return
         self._dry_run = True  # writes to dryrun_*.log, so it can't look like a real run
