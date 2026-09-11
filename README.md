@@ -127,7 +127,10 @@ To exit completely, use **Quit** in this menu.
 
 **Reopening a hidden app works normally.** Launching it again — from Lab Hub, Spotlight,
 the Finder, or `open -a` — brings the running copy back rather than starting a second
-one or doing nothing. See Single-instance guard below.
+one or doing nothing. A minimized window is restored before it is raised. Closing while
+fullscreen first exits the macOS fullscreen Space, then hides after the transition; this
+prevents the empty black Space that results from hiding a fullscreen window directly.
+See Single-instance guard below.
 
 ---
 
@@ -185,6 +188,11 @@ MIRROR=1 ~/Documents/lab/_Admin/backup/backup_to_gdrive.sh             # apply
 ---
 
 ## How the nightly backup works
+
+Before Run, Dry run, quick-folder backup, or Preview deletions starts, the app checks the
+Google Drive **mount root**, not the final backup destination. The destination may be
+missing on a first run or after its contents are cleared; the backup script creates it.
+Only an unavailable Drive mount blocks the operation.
 
 Triggered by an in-app timer, not launchd — required because macOS 26 (Tahoe)
 removed `spctl --add` and Gatekeeper blocks unsigned apps in non-interactive launchd

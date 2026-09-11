@@ -17,6 +17,8 @@
 - [x] `P2` `testing` `@ai` Regression test for the overdue-notification cooldown persisted in `state.json`
 - [x] `P3` `docs` `@ai` Document the `_Admin/backup/` file map in the README rather than only in the table
 - [x] `P1` `bug` `@ai` **Backup history only ever showed the day's first run.** Several backups a day (manual re-runs, USB-mount triggers) append to the same daily log file, but `last_backup_info()`/`last_backup_age_hours()`/`last_sync_per_folder()` and the History dialog's `_parse_runs()` all scanned each log as one block of text — so the status shown was always the day's first run's, and the History table listed at most one row per day no matter how many runs actually happened. Fixed with `iter_log_runs()`, which splits a log into per-run blocks on the `===== Backup run started` markers; every caller now iterates runs, not files, so "Last 15 runs" in the History table means runs.
+- [x] `P1` `bug` `@ai` **Closing a fullscreen window left a black macOS Space.** The app now leaves fullscreen before the animated hide-to-menu-bar transition, drops the Dock tile only after hiding, and restores a minimized window when reopened.
+- [x] `P1` `bug` `@ai` **Backup pre-flight checked the destination instead of the Google Drive mount.** A missing destination is valid because the backup script creates it; Run, Dry run, quick-folder backup, and Preview deletions now test the mounted Drive root and no longer block a healthy first run.
 
 ## v3 — blocked or deferred
 
