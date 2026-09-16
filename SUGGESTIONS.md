@@ -9,10 +9,8 @@ Status: `IDEA` · `CONSIDERING` · `PLANNED` · `DONE` · `REJECTED`
 | # | Suggestion | Category | Effort | Status |
 |---|---|---|---|---|
 | 1 | Developer ID code signing — removes the Full Disk Access re-grant after every rebuild and makes the launchd fallback reliable. Needs a paid Apple Developer account; cannot be done in code alone. | infra | M | BLOCKED |
-| 3 | Storage quota trend chart | performance | L | DONE |
 | 4 | Restore helper — pick a dated log, restore what that run moved | feature | XL | DEFERRED |
 | 5 | S3 / Backblaze B2 as a second destination | feature | XL | DEFERRED |
-| 6 | Email or webhook notification on backup failure | feature | M | DONE |
 | 7 | Power Nap backup via an `SMAppService` helper daemon | research | L | IDEA |
 | 8 | macOS Shortcuts action that triggers `--run-backup` | feature | M | IDEA |
 | 9 | Focus-mode notification filter, so overdue alerts stay quiet during Do Not Disturb | feature | M | IDEA |
