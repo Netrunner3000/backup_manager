@@ -20,6 +20,14 @@
 - [x] `P1` `bug` `@ai` **Closing a fullscreen window left a black macOS Space.** The app now leaves fullscreen before the animated hide-to-menu-bar transition, drops the Dock tile only after hiding, and restores a minimized window when reopened.
 - [x] `P1` `bug` `@ai` **Backup pre-flight checked the destination instead of the Google Drive mount.** A missing destination is valid because the backup script creates it; Run, Dry run, quick-folder backup, and Preview deletions now test the mounted Drive root and no longer block a healthy first run.
 
+- [x] `P2` `infra` `@ai` **Versioned `v<MAJOR>.<BUILD>`, shown in the app.** The arc
+  lives in `VERSION`; the build is `git rev-list --count HEAD`, so it cannot be forgotten.
+  `version.py` reads live git from a checkout and a `_build_info.json` stamped by
+  `scripts/stamp_version.py` from a frozen bundle, and says `v2.???` rather than guessing
+  when it has neither. Shown in the window title, and read by Lab Hub's tile so you can see which
+  build its Launch button would open. Lab-wide scheme, same two inputs as the Lab Project
+  Monitor.
+
 ## v3 — blocked or deferred
 
 - [ ] `P1` `infra` `@me` **Developer ID code signing** — needs a paid Apple Developer account ($99/yr). Removes the Full Disk Access re-grant after every rebuild and makes the launchd fallback reliable. Cannot be done in code.

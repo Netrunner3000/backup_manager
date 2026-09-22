@@ -22,6 +22,8 @@ import re
 import shutil
 import subprocess
 import urllib.request
+
+import version
 from datetime import datetime
 from pathlib import Path
 
@@ -2760,7 +2762,10 @@ class SmartScrollArea(QScrollArea):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Backup Control Center")
+        # The build is part of the app's identity, not a detail hidden in an
+        # About box: "is this the one I just built" is asked far more often
+        # than it is answered.
+        self.setWindowTitle(f"Backup Control Center {version.version_string()}")
         self.resize(1120, 860)
         self.setMinimumWidth(1020)
 

@@ -8,7 +8,14 @@ uv pip install -q pyinstaller
 
 rm -rf build dist
 
-pyinstaller --noconfirm --windowed --name "Backup Control Center" --icon assets/icon.icns main.py
+# A frozen bundle has no .git, so record the build it was made from.
+python scripts/stamp_version.py
+
+pyinstaller --noconfirm --windowed --name "Backup Control Center" \
+  --icon assets/icon.icns \
+  --add-data "VERSION:." \
+  --add-data "_build_info.json:." \
+  main.py
 
 rm -rf "/Applications/Backup Control Center.app"
 cp -R "dist/Backup Control Center.app" /Applications/
